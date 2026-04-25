@@ -1,0 +1,206 @@
+package watcher
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
+	"github.com/jimyag/logpilot/internal/log-pilot-agent/runner"
+	"github.com/jimyag/logpilot/internal/log-pilot-agent/status"
+)
+
+const podLogPolicyAnnotation = "beta.logpilot.io/log-policy"
+
+// Config holds watcher configuration derived from the LogPilot CR.
+type Config struct {
+	NodeName  string
+	LogDir    string
+	ConfigDir string
+	MetaDir   string
+}
+
+// runnerEntry tracks a runner and its log path.
+type runnerEntry struct {
+	r       *runner.Runner
+	logPath string
+}
+
+// Watcher watches pods on this node and manages runners per pod/container/logType.
+type Watcher struct {
+	cfg     Config
+	client  client.Client
+	status  *status.Server
+	runners map[string]*runnerEntry // key: podUID/container/logType
+	mu      sync.Mutex
+}
+
+// New creates a Watcher.
+func New(cfg Config, c client.Client, statusSrv *status.Server) *Watcher {
+	return &Watcher{
+		cfg:     cfg,
+		client:  c,
+		status:  statusSrv,
+		runners: make(map[string]*runnerEntry),
+	}
+}
+
+// Start begins watching pods on this node. Blocks until ctx is cancelled.
+func (w *Watcher) Start(ctx context.Context) error {
+	// Poll pods on this node periodically.
+	// A production implementation would use an informer for efficiency.
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	seen := make(map[string]bool)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := w.reconcile(ctx, seen); err != nil {
+				continue
+			}
+		}
+	}
+}
+
+// reconcile lists pods on this node, starts runners for new pods, and cleans up deleted ones.
+func (w *Watcher) reconcile(ctx context.Context, seen map[string]bool) error {
+	podList := &corev1.PodList{}
+	if err := w.client.List(ctx, podList,
+		client.MatchingFieldsSelector{
+			Selector: fields.OneTermEqualSelector("spec.nodeName", w.cfg.NodeName),
+		}); err != nil {
+		return err
+	}
+
+	current := make(map[string]bool)
+	for _, pod := range podList.Items {
+		uid := string(pod.UID)
+		current[uid] = true
+		if !seen[uid] {
+			seen[uid] = true
+			w.OnPodAdd(pod.DeepCopy())
+		}
+	}
+
+	// Detect deleted pods.
+	for uid := range seen {
+		if !current[uid] {
+			delete(seen, uid)
+			w.onPodDeleted(uid)
+		}
+	}
+	return nil
+}
+
+// OnPodAdd starts runners for a pod that has the log policy annotation.
+func (w *Watcher) OnPodAdd(pod *corev1.Pod) {
+	policies, err := parsePoliciesFromPod(pod)
+	if err != nil || len(policies) == 0 {
+		return
+	}
+	for _, cp := range policies {
+		key := runnerKey(string(pod.UID), cp.Name, cp.LogType)
+		logPath := w.logPath(pod, cp)
+
+		if err := ensureLogPath(pod, cp, logPath); err != nil {
+			continue
+		}
+
+		r := buildRunner(cp, logPath, w.cfg)
+		entry := &runnerEntry{r: r, logPath: logPath}
+
+		w.mu.Lock()
+		w.runners[key] = entry
+		w.mu.Unlock()
+
+		go func(r *runner.Runner, key string) {
+			r.Run(context.Background())
+			w.status.RemoveRunner(key)
+		}(r, key)
+
+		w.status.UpdateRunner(key, r.Lag(), 0)
+	}
+}
+
+// onPodDeleted stops runners for a deleted pod and schedules log dir cleanup.
+func (w *Watcher) onPodDeleted(podUID string) {
+	w.mu.Lock()
+	var toDelete []string
+	var entries []*runnerEntry
+	for key, entry := range w.runners {
+		if len(key) >= len(podUID) && key[:len(podUID)] == podUID {
+			toDelete = append(toDelete, key)
+			entries = append(entries, entry)
+		}
+	}
+	for _, key := range toDelete {
+		delete(w.runners, key)
+	}
+	w.mu.Unlock()
+
+	for i, entry := range entries {
+		go func(entry *runnerEntry, key string) {
+			entry.r.Stop()
+			// Wait for lag to reach zero (all data collected).
+			for entry.r.Lag() > 0 {
+				time.Sleep(500 * time.Millisecond)
+			}
+			w.status.RemoveRunner(key)
+			_ = removeLogPath(entry.logPath)
+		}(entry, toDelete[i])
+	}
+}
+
+func (w *Watcher) logPath(pod *corev1.Pod, cp logpilotv1alpha1.ContainerPolicy) string {
+	return fmt.Sprintf("%s/LogPilotPolicy/%s/%s/%s/%s/%s",
+		w.cfg.LogDir, pod.Namespace, pod.Name, string(pod.UID), cp.Name, cp.LogType)
+}
+
+func parsePoliciesFromPod(pod *corev1.Pod) ([]logpilotv1alpha1.ContainerPolicy, error) {
+	ann := pod.Annotations[podLogPolicyAnnotation]
+	if ann == "" {
+		return nil, nil
+	}
+	var policies []logpilotv1alpha1.ContainerPolicy
+	if err := json.Unmarshal([]byte(ann), &policies); err != nil {
+		return nil, err
+	}
+	return policies, nil
+}
+
+func runnerKey(podUID, container, logType string) string {
+	return fmt.Sprintf("%s/%s/%s", podUID, container, logType)
+}
+
+func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath string, cfg Config) *runner.Runner {
+	_ = logPath
+	_ = cfg
+	_ = cp
+	// TODO: wire up full pipeline from ContainerPolicy
+	// (Input from logPath, Transforms from cp.Transforms, Output from cp.Output, Clean from cp.Clean)
+	return runner.New(runner.Config{
+		BatchLen: cp.BatchLen,
+	})
+}
+
+// PodLogDir returns the top-level log directory for a pod.
+func (w *Watcher) PodLogDir(pod *corev1.Pod) string {
+	return fmt.Sprintf("%s/LogPilotPolicy/%s/%s/%s",
+		w.cfg.LogDir, pod.Namespace, pod.Name, string(pod.UID))
+}
+
+// Cleanup removes the log directory for a pod after all runners have finished.
+func (w *Watcher) Cleanup(pod *corev1.Pod) error {
+	return os.RemoveAll(w.PodLogDir(pod))
+}
