@@ -71,6 +71,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/nxadm/tail v1.4.11 // indirect
 	github.com/openshift/api v0.0.0-20260126183958-606bd613f9f7 // indirect
 	github.com/openshift/client-go v0.0.0-20260108185524-48f4ccfc4e13 // indirect
 	github.com/openshift/library-go v0.0.0-20260204080437-623f3f25ebcb // indirect
@@ -120,6 +121,7 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	k8s.io/apiextensions-apiserver v0.35.0 // indirect
 	k8s.io/apiserver v0.35.0 // indirect
 	k8s.io/component-base v0.35.0 // indirect
