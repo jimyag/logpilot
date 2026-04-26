@@ -79,7 +79,9 @@ func main() {
 
 	<-ctx.Done()
 	log.Info("log-pilot-agent shutting down gracefully")
-	// Runners drain themselves via Stop() + shutdown() path before process exits.
+	// Stop all runners, wait for them to drain and commit offsets.
+	w.StopAll()
+	log.Info("log-pilot-agent stopped")
 }
 
 func envOrDefault(key, def string) string {

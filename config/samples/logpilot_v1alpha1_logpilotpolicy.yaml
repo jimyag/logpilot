@@ -1,9 +1,51 @@
-apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
+apiVersion: logpilot.jimyag.com/v1alpha1
 kind: LogPilotPolicy
 metadata:
-  labels:
-    app.kubernetes.io/name: logpilot
-    app.kubernetes.io/managed-by: kustomize
-  name: logpilotpolicy-sample
+  name: my-app-logs
+  namespace: default
 spec:
-  # TODO(user): Add fields here
+  selector:
+    matchLabels:
+      app: my-app
+  containers:
+    - name: app
+      logType: applog
+      path: /app/logs
+      collector: host
+      delivery: guaranteed
+      batchLen: 1000
+      transforms:
+        - type: json
+        - type: label
+          config:
+            fields:
+              logtype: applog
+      output:
+        type: http
+        batchLen: 500
+        batchInterval: 300
+        config:
+          url: "http://log-collector:8080/ingest"
+      clean:
+        strategy: afterCollected
+        interval: 10
+        reserveFileNumber: 5
+
+    - name: app
+      logType: std
+      path: "-"
+      collector: host
+      delivery: bestEffort
+      transforms:
+        - type: label
+          config:
+            fields:
+              logtype: std
+      output:
+        type: http
+        batchLen: 500
+        batchInterval: 60
+        config:
+          url: "http://log-collector:8080/ingest"
+      clean:
+        strategy: never

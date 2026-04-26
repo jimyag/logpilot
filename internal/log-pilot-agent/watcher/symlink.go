@@ -28,8 +28,9 @@ func ensureLogPath(pod *corev1.Pod, cp logpilotv1alpha1.ContainerPolicy, logPath
 
 	case cp.Delivery == "bestEffort":
 		// emptyDir: symlink to kubelet emptyDir path.
+		// Volume name must match the name injected by log-pilot-api: "log-pilot-logs".
 		target := fmt.Sprintf(
-			"/var/lib/kubelet/pods/%s/volumes/kubernetes.io~empty-dir/pods-log/%s/%s",
+			"/var/lib/kubelet/pods/%s/volumes/kubernetes.io~empty-dir/log-pilot-logs/%s/%s",
 			string(pod.UID), cp.Name, cp.LogType)
 		return forceSymlink(target, logPath)
 

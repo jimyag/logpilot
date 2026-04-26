@@ -86,12 +86,7 @@ func (r *Runner) applyTransforms(ctx context.Context, records []input.Record) []
 // shutdown drains remaining buffered input, flushes output, and commits all offsets.
 // Uses a bounded drain window so it never blocks indefinitely.
 func (r *Runner) shutdown() {
-	// Close input first to unblock any waiting ReadBatch calls.
-	if r.cfg.Input != nil {
-		r.cfg.Input.Close()
-	}
-
-	// Drain any records already buffered in the input channel (non-blocking).
+	// Drain first (before closing), with a bounded timeout.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if r.cfg.Input != nil {
@@ -105,6 +100,8 @@ func (r *Runner) shutdown() {
 				_ = r.cfg.Output.WriteBatch(drainCtx, records)
 			}
 		}
+		// Close input after draining to commit final offset.
+		r.cfg.Input.Close()
 	}
 	// Flush buffered output and release connections.
 	if r.cfg.Output != nil {

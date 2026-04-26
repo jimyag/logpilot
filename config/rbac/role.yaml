@@ -6,6 +6,29 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
+# CRD resources
+- apiGroups: ["logpilot.logpilot.jimyag.com"]
+  resources: ["logpilots", "logpilotpolicies", "clusterlogpilotpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["logpilot.logpilot.jimyag.com"]
+  resources: ["logpilots/status", "logpilotpolicies/status", "clusterlogpilotpolicies/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["logpilot.logpilot.jimyag.com"]
+  resources: ["logpilots/finalizers", "logpilotpolicies/finalizers", "clusterlogpilotpolicies/finalizers"]
+  verbs: ["update"]
+# Pod watching (for agent)
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
+# Deployments and DaemonSets (operator deploys api + agent)
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Events
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+# Leader election
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
+	cleanfactory "github.com/jimyag/logpilot/internal/log-pilot-agent/clean"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 	outputfactory "github.com/jimyag/logpilot/internal/log-pilot-agent/output"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/runner"
@@ -128,8 +129,24 @@ func (w *Watcher) OnPodAdd(pod *corev1.Pod) {
 		w.runners[key] = entry
 		w.mu.Unlock()
 
+		// Start a goroutine to run the pipeline and keep status updated.
 		go func(r *runner.Runner, key string) {
+			// Update lag every second while running.
+			ticker := time.NewTicker(time.Second)
+			done := make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-ticker.C:
+						w.status.UpdateRunner(key, r.Lag(), 0)
+					case <-done:
+						ticker.Stop()
+						return
+					}
+				}
+			}()
 			r.Run(context.Background())
+			close(done)
 			w.status.RemoveRunner(key)
 		}(r, key)
 
@@ -193,31 +210,30 @@ func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath string, cfg Config
 		batchLen = 1000
 	}
 
-	// Build Input: tail all *.log* files in the log path directory.
+	// Use dir Input: scans the logPath directory for all log files,
+	// tracks per-file inode and offset, handles rotation and new files.
 	metaPath := filepath.Join(cfg.MetaDir, "LogPilotPolicy",
-		fmt.Sprintf("%s_%s.offset", cp.Name, cp.LogType))
-	fileInput, err := input.NewFileInput(input.FileConfig{
-		Path:              filepath.Join(logPath, "*.log*"),
+		fmt.Sprintf("%s_%s_dir.json", cp.Name, cp.LogType))
+	dirInput, err := input.NewDirInput(input.DirConfig{
+		Dir:               logPath,
 		MetaPath:          metaPath,
 		ReadFrom:          "oldest",
 		OffsetCommitEvery: 1000,
-	}, cfg.MetaDir)
+	})
 	if err != nil {
-		// Log path may not exist yet; return a minimal runner.
 		return runner.New(runner.Config{BatchLen: batchLen})
 	}
 
-	// Build Transforms from ContainerPolicy.
 	transforms, _ := transformfactory.NewSliceFromSpecs(cp.Transforms)
-
-	// Build Output from ContainerPolicy.
 	out, _ := outputfactory.NewFromSpec(cp.Output)
+	cln := cleanfactory.NewFromSpec(cp.Clean, logPath)
 
 	return runner.New(runner.Config{
 		Name:       fmt.Sprintf("%s/%s", cp.Name, cp.LogType),
-		Input:      fileInput,
+		Input:      dirInput,
 		Transforms: transforms,
 		Output:     out,
+		Clean:      cln,
 		BatchLen:   batchLen,
 	})
 }
@@ -231,4 +247,35 @@ func (w *Watcher) PodLogDir(pod *corev1.Pod) string {
 // Cleanup removes the log directory for a pod after all runners have finished.
 func (w *Watcher) Cleanup(pod *corev1.Pod) error {
 	return os.RemoveAll(w.PodLogDir(pod))
+}
+
+// StopAll signals all running runners to stop and waits for them to drain.
+// Called during graceful shutdown.
+func (w *Watcher) StopAll() {
+	w.mu.Lock()
+	entries := make([]*runnerEntry, 0, len(w.runners))
+	for _, e := range w.runners {
+		entries = append(entries, e)
+	}
+	w.mu.Unlock()
+
+	for _, e := range entries {
+		e.r.Stop()
+	}
+
+	// Wait for all runners to drain (lag == 0) with a 30s timeout.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		allDone := true
+		for _, e := range entries {
+			if e.r.Lag() > 0 {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

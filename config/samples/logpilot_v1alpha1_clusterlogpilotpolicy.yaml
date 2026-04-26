@@ -1,9 +1,23 @@
-apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
+apiVersion: logpilot.jimyag.com/v1alpha1
 kind: ClusterLogPilotPolicy
 metadata:
-  labels:
-    app.kubernetes.io/name: logpilot
-    app.kubernetes.io/managed-by: kustomize
-  name: clusterlogpilotpolicy-sample
+  name: k8s-events
 spec:
-  # TODO(user): Add fields here
+  input:
+    type: k8sEvent
+    batchLen: 500
+    config:
+      namespaces:
+        - default
+        - production
+  transforms:
+    - type: label
+      config:
+        fields:
+          source: k8sEvent
+  output:
+    type: http
+    batchLen: 200
+    batchInterval: 60
+    config:
+      url: "http://log-collector:8080/ingest"
