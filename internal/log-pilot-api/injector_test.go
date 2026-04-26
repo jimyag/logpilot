@@ -1,6 +1,7 @@
 package logpilotapi
 
 import (
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -145,5 +146,59 @@ func TestInjectPodBestEffortUsesEmptyDir(t *testing.T) {
 	}
 	if pod.Spec.Volumes[0].EmptyDir == nil {
 		t.Error("expected emptyDir volume for bestEffort delivery")
+	}
+}
+
+func TestInjectPodFullPipeline(t *testing.T) {
+	containers := []logpilotv1alpha1.ContainerPolicy{
+		{
+			Name:      "app",
+			LogType:   "applog",
+			Path:      "/app/logs",
+			Delivery:  "guaranteed",
+			Collector: "host",
+		},
+		{
+			Name:      "app",
+			LogType:   "std",
+			Path:      "-",
+			Delivery:  "bestEffort",
+			Collector: "host",
+		},
+	}
+	policy := makePolicy(map[string]string{"app": "myapp"}, containers)
+	pod := makePod(map[string]string{"app": "myapp"}, []corev1.Container{
+		{Name: "app"},
+	})
+
+	if err := injectPod(pod, []*logpilotv1alpha1.LogPilotPolicy{policy}); err != nil {
+		t.Fatal(err)
+	}
+
+	// One volume (hostPath because guaranteed takes precedence over bestEffort).
+	if len(pod.Spec.Volumes) != 1 {
+		t.Fatalf("expected 1 volume, got %d", len(pod.Spec.Volumes))
+	}
+	if pod.Spec.Volumes[0].HostPath == nil {
+		t.Error("expected hostPath volume when any policy has guaranteed delivery")
+	}
+
+	// One VolumeMount: only /app/logs; stdout "-" does not get a mount.
+	c := pod.Spec.Containers[0]
+	if len(c.VolumeMounts) != 1 {
+		t.Fatalf("expected 1 VolumeMount, got %d", len(c.VolumeMounts))
+	}
+	if c.VolumeMounts[0].MountPath != "/app/logs" {
+		t.Errorf("expected /app/logs, got %q", c.VolumeMounts[0].MountPath)
+	}
+
+	// Annotation should encode both container policies.
+	ann := pod.Annotations[podLogPolicyAnnotation]
+	var decoded []logpilotv1alpha1.ContainerPolicy
+	if err := json.Unmarshal([]byte(ann), &decoded); err != nil {
+		t.Fatalf("invalid annotation JSON: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 policies in annotation, got %d", len(decoded))
 	}
 }

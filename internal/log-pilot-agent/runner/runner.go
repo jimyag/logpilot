@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/clean"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
@@ -83,20 +84,27 @@ func (r *Runner) applyTransforms(ctx context.Context, records []input.Record) []
 }
 
 // shutdown drains remaining buffered input, flushes output, and commits all offsets.
+// Uses a bounded drain window so it never blocks indefinitely.
 func (r *Runner) shutdown() {
-	ctx := context.Background()
+	// Close input first to unblock any waiting ReadBatch calls.
+	if r.cfg.Input != nil {
+		r.cfg.Input.Close()
+	}
+
+	// Drain any records already buffered in the input channel (non-blocking).
+	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	if r.cfg.Input != nil {
 		for {
-			records, err := r.cfg.Input.ReadBatch(ctx, r.cfg.BatchLen)
+			records, err := r.cfg.Input.ReadBatch(drainCtx, r.cfg.BatchLen)
 			if err != nil || len(records) == 0 {
 				break
 			}
-			records = r.applyTransforms(ctx, records)
+			records = r.applyTransforms(drainCtx, records)
 			if len(records) > 0 && r.cfg.Output != nil {
-				_ = r.cfg.Output.WriteBatch(ctx, records)
+				_ = r.cfg.Output.WriteBatch(drainCtx, records)
 			}
 		}
-		r.cfg.Input.Close()
 	}
 	// Flush buffered output and release connections.
 	if r.cfg.Output != nil {
