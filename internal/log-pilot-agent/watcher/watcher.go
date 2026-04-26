@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -13,8 +14,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
+	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
+	outputfactory "github.com/jimyag/logpilot/internal/log-pilot-agent/output"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/runner"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/status"
+	transformfactory "github.com/jimyag/logpilot/internal/log-pilot-agent/transform"
 )
 
 const podLogPolicyAnnotation = "beta.logpilot.io/log-policy"
@@ -184,13 +188,37 @@ func runnerKey(podUID, container, logType string) string {
 }
 
 func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath string, cfg Config) *runner.Runner {
-	_ = logPath
-	_ = cfg
-	_ = cp
-	// TODO: wire up full pipeline from ContainerPolicy
-	// (Input from logPath, Transforms from cp.Transforms, Output from cp.Output, Clean from cp.Clean)
+	batchLen := cp.BatchLen
+	if batchLen == 0 {
+		batchLen = 1000
+	}
+
+	// Build Input: tail all *.log* files in the log path directory.
+	metaPath := filepath.Join(cfg.MetaDir, "LogPilotPolicy",
+		fmt.Sprintf("%s_%s.offset", cp.Name, cp.LogType))
+	fileInput, err := input.NewFileInput(input.FileConfig{
+		Path:              filepath.Join(logPath, "*.log*"),
+		MetaPath:          metaPath,
+		ReadFrom:          "oldest",
+		OffsetCommitEvery: 1000,
+	}, cfg.MetaDir)
+	if err != nil {
+		// Log path may not exist yet; return a minimal runner.
+		return runner.New(runner.Config{BatchLen: batchLen})
+	}
+
+	// Build Transforms from ContainerPolicy.
+	transforms, _ := transformfactory.NewSliceFromSpecs(cp.Transforms)
+
+	// Build Output from ContainerPolicy.
+	out, _ := outputfactory.NewFromSpec(cp.Output)
+
 	return runner.New(runner.Config{
-		BatchLen: cp.BatchLen,
+		Name:       fmt.Sprintf("%s/%s", cp.Name, cp.LogType),
+		Input:      fileInput,
+		Transforms: transforms,
+		Output:     out,
+		BatchLen:   batchLen,
 	})
 }
 
