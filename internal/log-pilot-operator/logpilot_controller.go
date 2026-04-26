@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,14 +55,36 @@ func (r *LogPilotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.Info("reconciled LogPilot", "name", lp.Name,
-		"logDir", lp.Spec.Agent.LogDir,
-		"apiReplicas", lp.Spec.API.Replicas)
+	apiImage := os.Getenv("LOG_PILOT_API_IMAGE")
+	if apiImage == "" {
+		apiImage = "ghcr.io/jimyag/logpilot/log-pilot-api:latest"
+	}
+	agentImage := os.Getenv("LOG_PILOT_AGENT_IMAGE")
+	if agentImage == "" {
+		agentImage = "ghcr.io/jimyag/logpilot/log-pilot-agent:latest"
+	}
 
-	// TODO: deploy/update log-pilot-api Deployment
-	// TODO: deploy/update log-pilot-agent DaemonSet
-	// TODO: update status conditions
+	// Reconcile log-pilot-api Deployment.
+	apiDeploy := buildAPIDeployment(&lp, apiImage)
+	if err := ctrl.SetControllerReference(&lp, apiDeploy, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := reconcileDeployment(ctx, r.Client, apiDeploy); err != nil {
+		log.Error(err, "failed to reconcile log-pilot-api deployment")
+		return ctrl.Result{}, err
+	}
 
+	// Reconcile log-pilot-agent DaemonSet.
+	agentDS := buildAgentDaemonSet(&lp, agentImage)
+	if err := ctrl.SetControllerReference(&lp, agentDS, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := reconcileDaemonSet(ctx, r.Client, agentDS); err != nil {
+		log.Error(err, "failed to reconcile log-pilot-agent daemonset")
+		return ctrl.Result{}, err
+	}
+
+	log.Info("reconciled LogPilot", "name", lp.Name)
 	return ctrl.Result{}, nil
 }
 
