@@ -46,6 +46,12 @@ func (r *Runner) Run(ctx context.Context) {
 			break
 		}
 		if len(records) == 0 {
+			// Back off to avoid busy-looping when the source has no new data.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 			continue
 		}
 		records = r.applyTransforms(ctx, records)
