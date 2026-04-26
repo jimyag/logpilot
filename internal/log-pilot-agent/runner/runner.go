@@ -24,7 +24,8 @@ type Config struct {
 // Runner executes an Input→Transform→Output→Clean pipeline.
 type Runner struct {
 	cfg     Config
-	stopped int32 // atomic flag for graceful shutdown
+	stopped int32    // atomic flag for graceful shutdown
+	done    chan struct{} // closed when Run() returns, for callers to wait on
 }
 
 // New creates a Runner from the given Config.
@@ -32,11 +33,13 @@ func New(cfg Config) *Runner {
 	if cfg.BatchLen == 0 {
 		cfg.BatchLen = 1000
 	}
-	return &Runner{cfg: cfg}
+	return &Runner{cfg: cfg, done: make(chan struct{})}
 }
 
-// Run blocks until ctx is cancelled, then drains and shuts down gracefully.
+// Run blocks until stopped or ctx cancelled, then drains and shuts down gracefully.
+// Closes the Done() channel when it returns.
 func (r *Runner) Run(ctx context.Context) {
+	defer close(r.done)
 	for {
 		if atomic.LoadInt32(&r.stopped) > 0 {
 			break
@@ -65,6 +68,10 @@ func (r *Runner) Run(ctx context.Context) {
 	r.shutdown()
 }
 
+// Done returns a channel that is closed when Run() has fully completed,
+// including drain and output flush. Use this to wait for clean shutdown.
+func (r *Runner) Done() <-chan struct{} { return r.done }
+
 // Lag returns the number of unread bytes remaining in the input.
 func (r *Runner) Lag() int64 {
 	if r.cfg.Input == nil {
@@ -90,9 +97,7 @@ func (r *Runner) applyTransforms(ctx context.Context, records []input.Record) []
 }
 
 // shutdown drains remaining buffered input, flushes output, and commits all offsets.
-// Uses a bounded drain window so it never blocks indefinitely.
 func (r *Runner) shutdown() {
-	// Drain first (before closing), with a bounded timeout.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if r.cfg.Input != nil {
@@ -106,14 +111,11 @@ func (r *Runner) shutdown() {
 				_ = r.cfg.Output.WriteBatch(drainCtx, records)
 			}
 		}
-		// Close input after draining to commit final offset.
 		r.cfg.Input.Close()
 	}
-	// Flush buffered output and release connections.
 	if r.cfg.Output != nil {
 		r.cfg.Output.Close()
 	}
-	// Force-commit all offsets regardless of offsetCommitEvery setting.
 	if r.cfg.Clean != nil {
 		_ = r.cfg.Clean.Clean(clean.RunnerMeta{})
 	}

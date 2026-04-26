@@ -14,7 +14,11 @@ func NewFromSpec(spec logpilotv1alpha1.CleanSpec, logDir string) Clean {
 	case "never":
 		return &neverClean{}
 	case "retain":
-		return &retainClean{logDir: logDir, retainDays: spec.RetainDays}
+		days := spec.RetainDays
+		if days <= 0 {
+			days = 7 // safe default: retain at least 7 days
+		}
+		return &retainClean{logDir: logDir, retainDays: days}
 	default: // "afterCollected" and empty string
 		return &afterCollectedClean{logDir: logDir}
 	}

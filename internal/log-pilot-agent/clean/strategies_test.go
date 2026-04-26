@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
@@ -61,25 +60,22 @@ func TestNeverClean(t *testing.T) {
 	}
 }
 
-func TestRetainCleanRetainDays0(t *testing.T) {
+func TestRetainCleanRetainDays0DefaultsTo7(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
 	os.WriteFile(logFile, []byte("data"), 0644)
 
-	// retainDays=0 means cutoff is now, so any file modified before now should clean.
+	// retainDays=0 should default to 7 days (safe default), so a just-created
+	// file should NOT be cleaned.
 	spec := logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 0}
 	c := NewFromSpec(spec, dir)
-
-	// Backdate file modification time by 1 second to ensure it's before cutoff.
-	past := time.Now().Add(-time.Second)
-	os.Chtimes(logFile, past, past)
 
 	should, err := c.ShouldClean(RunnerMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !should {
-		t.Fatal("expected ShouldClean=true with retainDays=0 and old file")
+	if should {
+		t.Fatal("expected ShouldClean=false for new file with retainDays defaulting to 7")
 	}
 }
 

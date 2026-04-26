@@ -122,7 +122,7 @@ func (w *Watcher) OnPodAdd(pod *corev1.Pod) {
 			continue
 		}
 
-		r := buildRunner(cp, logPath, w.cfg)
+		r := buildRunner(cp, logPath, string(pod.UID), w.cfg)
 		entry := &runnerEntry{r: r, logPath: logPath}
 
 		w.mu.Lock()
@@ -173,9 +173,11 @@ func (w *Watcher) onPodDeleted(podUID string) {
 	for i, entry := range entries {
 		go func(entry *runnerEntry, key string) {
 			entry.r.Stop()
-			// Wait for lag to reach zero (all data collected).
-			for entry.r.Lag() > 0 {
-				time.Sleep(500 * time.Millisecond)
+			// Wait for runner to fully complete (drain + flush) with a 30s timeout.
+			// This avoids goroutine leaks when output is unreachable.
+			select {
+			case <-entry.r.Done():
+			case <-time.After(30 * time.Second):
 			}
 			w.status.RemoveRunner(key)
 			_ = removeLogPath(entry.logPath)
@@ -204,16 +206,16 @@ func runnerKey(podUID, container, logType string) string {
 	return fmt.Sprintf("%s/%s/%s", podUID, container, logType)
 }
 
-func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath string, cfg Config) *runner.Runner {
+func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cfg Config) *runner.Runner {
 	batchLen := cp.BatchLen
 	if batchLen == 0 {
 		batchLen = 1000
 	}
 
-	// Use dir Input: scans the logPath directory for all log files,
-	// tracks per-file inode and offset, handles rotation and new files.
+	// Include podUID in metaPath so multiple pods matching the same policy
+	// don't share the same offset file and corrupt each other's state.
 	metaPath := filepath.Join(cfg.MetaDir, "LogPilotPolicy",
-		fmt.Sprintf("%s_%s_dir.json", cp.Name, cp.LogType))
+		podUID, fmt.Sprintf("%s_%s_dir.json", cp.Name, cp.LogType))
 	dirInput, err := input.NewDirInput(input.DirConfig{
 		Dir:               logPath,
 		MetaPath:          metaPath,
@@ -249,8 +251,9 @@ func (w *Watcher) Cleanup(pod *corev1.Pod) error {
 	return os.RemoveAll(w.PodLogDir(pod))
 }
 
-// StopAll signals all running runners to stop and waits for them to drain.
-// Called during graceful shutdown.
+// StopAll signals all running runners to stop and waits for them to fully
+// complete (drain + flush + offset commit) before returning.
+// Called during graceful shutdown to ensure no data loss.
 func (w *Watcher) StopAll() {
 	w.mu.Lock()
 	entries := make([]*runnerEntry, 0, len(w.runners))
@@ -259,23 +262,19 @@ func (w *Watcher) StopAll() {
 	}
 	w.mu.Unlock()
 
+	// Signal all runners to stop.
 	for _, e := range entries {
 		e.r.Stop()
 	}
 
-	// Wait for all runners to drain (lag == 0) with a 30s timeout.
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		allDone := true
-		for _, e := range entries {
-			if e.r.Lag() > 0 {
-				allDone = false
-				break
-			}
+	// Wait for each runner goroutine to fully complete (not just lag==0).
+	// Done() is closed at the end of runner.Run(), after shutdown() finishes.
+	timeout := time.After(30 * time.Second)
+	for _, e := range entries {
+		select {
+		case <-e.r.Done():
+		case <-timeout:
+			return
 		}
-		if allDone {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
 	}
 }

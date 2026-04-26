@@ -33,7 +33,7 @@ func TestBuildRunnerFileOutput(t *testing.T) {
 		MetaDir: t.TempDir(),
 	}
 
-	r := buildRunner(cp, logPath, cfg)
+	r := buildRunner(cp, logPath, "test-uid", cfg)
 	if r == nil {
 		t.Fatal("expected non-nil runner")
 	}
@@ -66,7 +66,7 @@ func TestBuildRunnerWithTransforms(t *testing.T) {
 		},
 	}
 
-	r := buildRunner(cp, logPath, Config{MetaDir: t.TempDir()})
+	r := buildRunner(cp, logPath, "test-uid", Config{MetaDir: t.TempDir()})
 	if r == nil {
 		t.Fatal("expected non-nil runner")
 	}
@@ -79,7 +79,7 @@ func TestBuildRunnerNoOutput(t *testing.T) {
 		LogType: "applog",
 		Output:  logpilotv1alpha1.OutputSpec{Type: "unknown"},
 	}
-	r := buildRunner(cp, t.TempDir(), Config{MetaDir: t.TempDir()})
+	r := buildRunner(cp, t.TempDir(), "test-uid", Config{MetaDir: t.TempDir()})
 	if r == nil {
 		t.Fatal("expected non-nil runner even with bad output config")
 	}

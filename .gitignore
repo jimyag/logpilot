@@ -37,6 +37,6 @@ internal/web/api/static/assets/
 DESIGN.md
 
 # Build output binaries (root level)
-log-pilot-operator
-log-pilot-api
-log-pilot-agent
+/log-pilot-operator
+/log-pilot-api
+/log-pilot-agent
