@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- logpilot_v1alpha1_logpilot.yaml
+- logpilot_v1alpha1_logpilotpolicy.yaml
+- logpilot_v1alpha1_clusterlogpilotpolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

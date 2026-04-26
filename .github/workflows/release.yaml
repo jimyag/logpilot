@@ -1,9 +1,7 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:  # 暂时禁用自动触发，手动触发保留
 
 permissions:
   contents: write

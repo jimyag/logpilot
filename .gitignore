@@ -32,3 +32,11 @@ coverage.txt
 
 # Embedded frontend build artifacts
 internal/web/api/static/assets/
+
+# Design documents
+DESIGN.md
+
+# Build output binaries (root level)
+log-pilot-operator
+log-pilot-api
+log-pilot-agent
