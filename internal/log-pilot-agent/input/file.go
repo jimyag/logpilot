@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,27 @@ import (
 
 	"github.com/nxadm/tail"
 )
+
+type offsetState struct {
+	Offset int64 `json:"offset"`
+}
+
+// loadOffset reads a persisted byte offset from metaPath.
+// Returns -1 if the file doesn't exist or can't be parsed.
+func loadOffset(metaPath string) int64 {
+	if metaPath == "" {
+		return -1
+	}
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		return -1
+	}
+	var state offsetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return -1
+	}
+	return state.Offset
+}
 
 // FileConfig configures a file-tailing Input.
 type FileConfig struct {
@@ -50,6 +72,10 @@ func NewFileInput(cfg FileConfig, metaDir string) (Input, error) {
 	seekInfo := &tail.SeekInfo{Offset: 0, Whence: 2} // newest by default
 	if cfg.ReadFrom == "oldest" {
 		seekInfo = &tail.SeekInfo{Offset: 0, Whence: 0}
+	}
+	// Restore saved offset if available — overrides readFrom.
+	if savedOffset := loadOffset(cfg.MetaPath); savedOffset >= 0 {
+		seekInfo = &tail.SeekInfo{Offset: savedOffset, Whence: 0}
 	}
 
 	t, err := tail.TailFile(cfg.Path, tail.Config{
@@ -133,15 +159,36 @@ func (f *fileInput) Close() error {
 }
 
 func (f *fileInput) commitOffset() {
+	pos, err := f.tail.Tell()
+	if err != nil {
+		pos = 0
+	}
+
+	// Update in-memory lag.
 	if info, err := os.Stat(f.cfg.Path); err == nil {
-		pos, _ := f.tail.Tell()
 		remaining := info.Size() - pos
 		if remaining < 0 {
 			remaining = 0
 		}
 		atomic.StoreInt64(&f.lag, remaining)
 	}
-	// TODO: persist offset to f.cfg.MetaPath for crash recovery
+
+	// Atomically persist offset to MetaPath (write tmp then rename).
+	if f.cfg.MetaPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(f.cfg.MetaPath), 0755); err != nil {
+		return
+	}
+	raw, err := json.Marshal(offsetState{Offset: pos})
+	if err != nil {
+		return
+	}
+	tmp := f.cfg.MetaPath + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, f.cfg.MetaPath)
 }
 
 func (f *fileInput) passesFilter(filename string) bool {
