@@ -308,7 +308,7 @@ func (w *Watcher) reconcileClusterPolicies(ctx context.Context, seen map[string]
 }
 
 func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPilotPolicy, key string) bool {
-	if policy.Spec.Input.Type != "k8sEvent" {
+	if policy.Spec.Input.Type != "k8sEvent" && policy.Spec.Input.Type != "k8sObjectState" {
 		return true
 	}
 	w.mu.Lock()
@@ -331,12 +331,19 @@ func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPil
 	if batchLen == 0 {
 		batchLen = 1000
 	}
+	runnerInput := input.Input(input.NewK8sEventInput(input.K8sEventConfig{
+		Namespaces:          namespaces,
+		ResourceVersionPath: filepath.Join(w.cfg.MetaDir, key, "resource-version"),
+	}, w.kube))
+	if policy.Spec.Input.Type == "k8sObjectState" {
+		runnerInput = input.NewK8sObjectStateInput(input.K8sObjectStateConfig{
+			Namespaces: namespaces,
+			Resources:  extractStringSlice(policy.Spec.Input.Config, "resources"),
+		}, w.kube)
+	}
 	r := runner.New(runner.Config{
-		Name: key,
-		Input: input.NewK8sEventInput(input.K8sEventConfig{
-			Namespaces:          namespaces,
-			ResourceVersionPath: filepath.Join(w.cfg.MetaDir, key, "resource-version"),
-		}, w.kube),
+		Name:       key,
+		Input:      runnerInput,
 		Transforms: transforms,
 		Output:     out,
 		BatchLen:   batchLen,

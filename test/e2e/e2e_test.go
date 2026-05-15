@@ -22,9 +22,13 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -44,6 +48,8 @@ const metricsServiceName = "logpilot-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "logpilot-metrics-binding"
+
+const stateTestNamespace = "logpilot-e2e-state"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -79,6 +85,15 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		_, _ = utils.Run(cmd)
+
+		By("removing state test namespace")
+		cmd = exec.Command("kubectl", "delete", "ns", stateTestNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
+		By("removing the LogPilot runtime")
+		cmd = exec.Command("kubectl", "delete", "logpilot", "logpilot", "-n", namespace,
+			"--ignore-not-found", "--timeout=2m")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -270,6 +285,160 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
+		It("should collect Kubernetes object state through ClusterLogPilotPolicy", func() {
+			By("allowing the LogPilot agent hostPath daemonset in the manager namespace")
+			cmd := exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+				"pod-security.kubernetes.io/enforce=privileged")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to relax pod security for LogPilot agent")
+
+			By("creating the state test namespace")
+			cmd = exec.Command("kubectl", "create", "ns", stateTestNamespace)
+			_, _ = utils.Run(cmd)
+
+			By("deploying the e2e HTTP collector")
+			applyYAML(fmt.Sprintf(`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector
+  namespace: %[1]s
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: collector
+  template:
+    metadata:
+      labels:
+        app: collector
+    spec:
+      containers:
+      - name: collector
+        image: %[2]s
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector
+  namespace: %[1]s
+spec:
+  selector:
+    app: collector
+  ports:
+  - port: 8080
+    targetPort: 8080
+`, stateTestNamespace, collectorImage))
+			rolloutStatus("deployment/collector", stateTestNamespace, 2*time.Minute)
+
+			By("creating the LogPilot runtime")
+			applyYAML(fmt.Sprintf(`
+apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
+kind: LogPilot
+metadata:
+  name: logpilot
+  namespace: %[1]s
+spec:
+  api:
+    replicas: 1
+  agent: {}
+			`, namespace))
+			waitForResource("deployment/log-pilot-api", namespace, 2*time.Minute)
+			waitForResource("daemonset/log-pilot-agent", namespace, 2*time.Minute)
+			rolloutStatus("deployment/log-pilot-api", namespace, 3*time.Minute)
+			rolloutStatus("daemonset/log-pilot-agent", namespace, 3*time.Minute)
+
+			By("creating a k8sObjectState cluster policy")
+			applyYAML(fmt.Sprintf(`
+apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
+kind: ClusterLogPilotPolicy
+metadata:
+  name: e2e-object-state
+spec:
+  input:
+    type: k8sObjectState
+    batchLen: 20
+    config:
+      namespaces:
+      - %[1]s
+      resources:
+      - pod
+      - node
+      - deployment
+      - daemonset
+      - job
+  transforms:
+  - type: label
+    config:
+      fields:
+        source: k8sObjectState
+  output:
+    type: http
+    config:
+      url: http://collector.%[1]s.svc.cluster.local:8080/ingest
+`, stateTestNamespace))
+			cmd = exec.Command("kubectl", "wait", "--for=condition=Accepted",
+				"clusterlogpilotpolicy/e2e-object-state", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "ClusterLogPilotPolicy should be accepted")
+
+			By("creating workload state changes")
+			applyYAML(fmt.Sprintf(`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: state-verify
+  namespace: %[1]s
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: state-verify
+  template:
+    metadata:
+      labels:
+        app: state-verify
+    spec:
+      containers:
+      - name: app
+        image: %[2]s
+        imagePullPolicy: IfNotPresent
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: state-verify-job
+  namespace: %[1]s
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: job
+        image: busybox:1.36
+        command: ["sh", "-c", "echo state-job"]
+`, stateTestNamespace, collectorImage))
+			rolloutStatus("deployment/state-verify", stateTestNamespace, 2*time.Minute)
+
+			By("verifying state records reached the collector")
+			Eventually(func(g Gomega) {
+				records, err := collectorRecordCount()
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(records).To(BeNumerically(">=", 8))
+			}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+			By("verifying only one agent owns the cluster state runner")
+			Eventually(func(g Gomega) {
+				count, sent, err := stateRunnerStatus()
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(count).To(Equal(1))
+				g.Expect(sent).To(BeNumerically(">=", 8))
+			}, 2*time.Minute, 2*time.Second).Should(Succeed())
+		})
+
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
 		// Consider applying sample/CR(s) and check their status and/or verifying
 		// the reconciliation by using the metrics, i.e.:
@@ -281,6 +450,105 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 })
+
+func applyYAML(manifest string) {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(strings.TrimSpace(manifest) + "\n")
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to apply manifest")
+}
+
+func rolloutStatus(resource, ns string, timeout time.Duration) {
+	cmd := exec.Command("kubectl", "-n", ns, "rollout", "status", resource,
+		"--timeout", fmt.Sprintf("%ds", int(timeout.Seconds())))
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Rollout did not complete")
+}
+
+func waitForResource(resource, ns string, timeout time.Duration) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		cmd := exec.Command("kubectl", "-n", ns, "get", resource)
+		_, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+	}, timeout, time.Second).Should(Succeed())
+}
+
+func collectorRecordCount() (int, error) {
+	pf := exec.Command("kubectl", "-n", stateTestNamespace, "port-forward", "svc/collector", "18084:8080")
+	if err := pf.Start(); err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = pf.Process.Kill()
+		_, _ = pf.Process.Wait()
+	}()
+	time.Sleep(time.Second)
+
+	resp, err := http.Get("http://127.0.0.1:18084/stats")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	var stats struct {
+		Records int `json:"records"`
+	}
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return 0, err
+	}
+	return stats.Records, nil
+}
+
+func stateRunnerStatus() (int, int, error) {
+	cmd := exec.Command("kubectl", "-n", namespace, "get", "pods",
+		"-l", "app.kubernetes.io/name=log-pilot-agent",
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return 0, 0, err
+	}
+	runnerCount := 0
+	sentTotal := 0
+	for idx, pod := range utils.GetNonEmptyLines(output) {
+		localPort := 19094 + idx
+		pf := exec.Command("kubectl", "-n", namespace, "port-forward", "pod/"+pod,
+			fmt.Sprintf("%d:9090", localPort))
+		if err := pf.Start(); err != nil {
+			return 0, 0, err
+		}
+		time.Sleep(time.Second)
+		resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(localPort) + "/status")
+		_ = pf.Process.Kill()
+		_, _ = pf.Process.Wait()
+		if err != nil {
+			return 0, 0, err
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return 0, 0, readErr
+		}
+		var status struct {
+			Runners []struct {
+				Name string `json:"name"`
+				Sent int    `json:"sent"`
+			} `json:"runners"`
+		}
+		if err := json.Unmarshal(body, &status); err != nil {
+			return 0, 0, err
+		}
+		for _, runner := range status.Runners {
+			if runner.Name == "ClusterLogPilotPolicy/e2e-object-state" {
+				runnerCount++
+				sentTotal += runner.Sent
+			}
+		}
+	}
+	return runnerCount, sentTotal, nil
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request

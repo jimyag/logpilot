@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -34,6 +36,8 @@ import (
 var (
 	// managerImage is the manager image to be built and loaded for testing.
 	managerImage = "example.com/logpilot:v0.0.1"
+	// collectorImage receives logpilot HTTP output during e2e tests.
+	collectorImage = "example.com/logpilot-e2e-collector:v0.0.1"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -54,11 +58,18 @@ var _ = BeforeSuite(func() {
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
+	By("building the e2e collector image")
+	ExpectWithOffset(1, buildCollectorImage()).To(Succeed(), "Failed to build the collector image")
+
 	// TODO(user): If you want to change the e2e test vendor from Kind,
 	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+
+	By("loading the collector image on Kind")
+	err = utils.LoadImageToKindClusterWithName(collectorImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the collector image into Kind")
 
 	setupCertManager()
 })
@@ -98,4 +109,70 @@ func teardownCertManager() {
 
 	By("uninstalling CertManager")
 	utils.UninstallCertManager()
+}
+
+func buildCollectorImage() error {
+	projectDir, err := utils.GetProjectDir()
+	if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp("", "logpilot-e2e-collector-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	source := `package main
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"sync/atomic"
+)
+
+var records int64
+
+func main() {
+	http.HandleFunc("/ingest", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var entries []map[string]interface{}
+		if err := json.Unmarshal(body, &entries); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		atomic.AddInt64(&records, int64(len(entries)))
+		w.WriteHeader(http.StatusOK)
+	})
+	http.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]int64{"records": atomic.LoadInt64(&records)})
+	})
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		panic(err)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "collector.go"), []byte(source), 0o644); err != nil {
+		return err
+	}
+	binPath := filepath.Join(tmpDir, "collector")
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", binPath, filepath.Join(tmpDir, "collector.go"))
+	cmd.Dir = projectDir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build collector binary: %s: %w", output, err)
+	}
+
+	dockerfile := `FROM scratch
+COPY collector /collector
+USER 65532:65532
+ENTRYPOINT ["/collector"]
+`
+	cmd = exec.Command("docker", "build", "-t", collectorImage, "-f", "-", tmpDir)
+	cmd.Dir = projectDir
+	cmd.Stdin = strings.NewReader(dockerfile)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build collector image: %s: %w", output, err)
+	}
+	return nil
 }

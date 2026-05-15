@@ -1,0 +1,30 @@
+apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
+kind: ClusterLogPilotPolicy
+metadata:
+  name: k8s-object-state
+spec:
+  input:
+    type: k8sObjectState
+    batchLen: 200
+    config:
+      namespaces:
+        - default
+        - production
+      resources:
+        - pod
+        - node
+        - deployment
+        - statefulset
+        - daemonset
+        - job
+  transforms:
+    - type: label
+      config:
+        fields:
+          source: k8sObjectState
+  output:
+    type: http
+    batchLen: 100
+    batchInterval: 60
+    config:
+      url: "http://log-collector:8080/ingest"

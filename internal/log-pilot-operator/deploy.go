@@ -229,7 +229,9 @@ func buildAgentClusterRole(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + agentName},
 		Rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{""}, Resources: []string{"pods", "events"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{""}, Resources: []string{"pods", "nodes", "events"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets", "daemonsets"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"get", "list", "watch"}},
 			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch"}},
 			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"clusterlogpilotpolicies"}, Verbs: []string{"get", "list", "watch"}},
 		},

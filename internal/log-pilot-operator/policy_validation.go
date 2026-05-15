@@ -19,8 +19,8 @@ func validateLogPilotPolicy(policy *logpilotv1alpha1.LogPilotPolicy) (bool, stri
 		return false, "spec must define selector+containers or input+output"
 	}
 	if hasStandalone {
-		if policy.Spec.Input.Type == "k8sEvent" {
-			return false, "k8sEvent input must use ClusterLogPilotPolicy"
+		if policy.Spec.Input.Type == "k8sEvent" || policy.Spec.Input.Type == "k8sObjectState" {
+			return false, "Kubernetes cluster inputs must use ClusterLogPilotPolicy"
 		}
 		if err := validateInput(*policy.Spec.Input); err != nil {
 			return false, err.Error()
@@ -47,8 +47,8 @@ func validateLogPilotPolicy(policy *logpilotv1alpha1.LogPilotPolicy) (bool, stri
 }
 
 func validateClusterLogPilotPolicy(policy *logpilotv1alpha1.ClusterLogPilotPolicy) (bool, string) {
-	if policy.Spec.Input.Type != "k8sEvent" {
-		return false, "ClusterLogPilotPolicy currently supports only k8sEvent input"
+	if policy.Spec.Input.Type != "k8sEvent" && policy.Spec.Input.Type != "k8sObjectState" {
+		return false, "ClusterLogPilotPolicy currently supports k8sEvent and k8sObjectState inputs"
 	}
 	if err := validateOutput(policy.Spec.Output); err != nil {
 		return false, err.Error()
@@ -61,7 +61,7 @@ func validateClusterLogPilotPolicy(policy *logpilotv1alpha1.ClusterLogPilotPolic
 
 func validateInput(input logpilotv1alpha1.InputSpec) error {
 	switch input.Type {
-	case "file", "dir", "k8sEvent":
+	case "file", "dir", "k8sEvent", "k8sObjectState":
 		return nil
 	default:
 		return fmt.Errorf("unknown input type %q", input.Type)

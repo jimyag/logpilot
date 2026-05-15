@@ -3,4 +3,5 @@ resources:
 - logpilot_v1alpha1_logpilot.yaml
 - logpilot_v1alpha1_logpilotpolicy.yaml
 - logpilot_v1alpha1_clusterlogpilotpolicy.yaml
+- logpilot_v1alpha1_clusterlogpilotpolicy_state.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

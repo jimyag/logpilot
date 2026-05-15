@@ -108,6 +108,7 @@ spec:
                           - file
                           - dir
                           - k8sEvent
+                          - k8sObjectState
                           type: string
                       required:
                       - type
@@ -190,6 +191,7 @@ spec:
                     - file
                     - dir
                     - k8sEvent
+                    - k8sObjectState
                     type: string
                 required:
                 - type

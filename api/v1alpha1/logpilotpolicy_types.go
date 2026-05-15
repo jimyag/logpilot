@@ -69,7 +69,7 @@ type ContainerPolicy struct {
 type InputSpec struct {
 	// Type is the input type.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=file;dir;k8sEvent
+	// +kubebuilder:validation:Enum=file;dir;k8sEvent;k8sObjectState
 	Type string `json:"type"`
 	// +kubebuilder:default=1000
 	BatchLen int `json:"batchLen,omitempty"`

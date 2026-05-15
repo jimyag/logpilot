@@ -40,8 +40,9 @@ type LogPilotReconciler struct {
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps,resources=deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods;services;serviceaccounts;secrets;configmaps;events,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods;nodes;services;serviceaccounts;secrets;configmaps;events,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
