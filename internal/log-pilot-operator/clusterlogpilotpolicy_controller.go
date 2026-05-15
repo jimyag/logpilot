@@ -47,9 +47,21 @@ type ClusterLogPilotPolicyReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *ClusterLogPilotPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var policy logpilotv1alpha1.ClusterLogPilotPolicy
+	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	accepted, message := validateClusterLogPilotPolicy(&policy)
+	setClusterLogPilotPolicyCondition(&policy, accepted, message)
+	if err := r.Status().Update(ctx, &policy); err != nil {
+		return ctrl.Result{}, err
+	}
+	if !accepted {
+		log.Error(nil, "ClusterLogPilotPolicy is invalid", "name", policy.Name, "reason", message)
+	}
 
 	return ctrl.Result{}, nil
 }

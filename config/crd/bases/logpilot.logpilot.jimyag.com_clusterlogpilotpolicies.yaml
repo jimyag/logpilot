@@ -52,7 +52,11 @@ spec:
                       x-kubernetes-preserve-unknown-fields: true
                     type: object
                   type:
-                    description: 'Type is the input type: file, dir, k8sEvent, mongo.'
+                    description: Type is the input type.
+                    enum:
+                    - file
+                    - dir
+                    - k8sEvent
                     type: string
                 required:
                 - type
@@ -74,8 +78,10 @@ spec:
                       x-kubernetes-preserve-unknown-fields: true
                     type: object
                   type:
-                    description: 'Type is the output type: kafka, elasticsearch, http,
-                      file.'
+                    description: Type is the output type.
+                    enum:
+                    - http
+                    - file
                     type: string
                 required:
                 - type
@@ -92,8 +98,11 @@ spec:
                         x-kubernetes-preserve-unknown-fields: true
                       type: object
                     type:
-                      description: 'Type is the transform type: json, label, drop,
-                        regex, multiline.'
+                      description: Type is the transform type.
+                      enum:
+                      - json
+                      - label
+                      - drop
                       type: string
                   required:
                   - type

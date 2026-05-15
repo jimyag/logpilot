@@ -123,9 +123,6 @@ func (f *fileInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 			}
 			records = append(records, Record{Data: []byte(line.Text)})
 			f.readCount++
-			if f.readCount%f.cfg.OffsetCommitEvery == 0 {
-				f.commitOffset()
-			}
 		case <-ctx.Done():
 			return records, nil
 		default:
@@ -151,6 +148,11 @@ func (f *fileInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 }
 
 func (f *fileInput) Lag() int64 { return atomic.LoadInt64(&f.lag) }
+
+func (f *fileInput) Commit() error {
+	f.commitOffset()
+	return nil
+}
 
 func (f *fileInput) Close() error {
 	atomic.StoreInt32(&f.stopped, 1)

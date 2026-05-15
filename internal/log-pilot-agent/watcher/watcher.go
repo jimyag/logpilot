@@ -6,12 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
@@ -28,6 +34,7 @@ const podLogPolicyAnnotation = "beta.logpilot.io/log-policy"
 // Config holds watcher configuration derived from the LogPilot CR.
 type Config struct {
 	NodeName  string
+	Namespace string
 	LogDir    string
 	ConfigDir string
 	MetaDir   string
@@ -43,16 +50,18 @@ type runnerEntry struct {
 type Watcher struct {
 	cfg     Config
 	client  client.Client
+	kube    kubernetes.Interface
 	status  *status.Server
 	runners map[string]*runnerEntry // key: podUID/container/logType
 	mu      sync.Mutex
 }
 
 // New creates a Watcher.
-func New(cfg Config, c client.Client, statusSrv *status.Server) *Watcher {
+func New(cfg Config, c client.Client, kube kubernetes.Interface, statusSrv *status.Server) *Watcher {
 	return &Watcher{
 		cfg:     cfg,
 		client:  c,
+		kube:    kube,
 		status:  statusSrv,
 		runners: make(map[string]*runnerEntry),
 	}
@@ -136,7 +145,11 @@ func (w *Watcher) OnPodAdd(pod *corev1.Pod) bool {
 			continue
 		}
 
-		r := buildRunner(cp, logPath, string(pod.UID), w.cfg)
+		r, err := buildRunner(cp, logPath, string(pod.UID), w.cfg)
+		if err != nil {
+			allReady = false
+			continue
+		}
 		entry := &runnerEntry{r: r, logPath: logPath}
 
 		w.mu.Lock()
@@ -152,7 +165,7 @@ func (w *Watcher) OnPodAdd(pod *corev1.Pod) bool {
 				for {
 					select {
 					case <-ticker.C:
-						w.status.UpdateRunner(key, r.Lag(), 0)
+						w.status.UpdateRunner(key, r.Lag(), r.Sent())
 					case <-done:
 						ticker.Stop()
 						return
@@ -221,7 +234,7 @@ func runnerKey(podUID, container, logType string) string {
 	return fmt.Sprintf("%s/%s/%s", podUID, container, logType)
 }
 
-func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cfg Config) *runner.Runner {
+func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cfg Config) (*runner.Runner, error) {
 	batchLen := cp.BatchLen
 	if batchLen == 0 {
 		batchLen = 1000
@@ -238,11 +251,17 @@ func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cf
 		OffsetCommitEvery: 1000,
 	})
 	if err != nil {
-		return runner.New(runner.Config{BatchLen: batchLen})
+		return nil, err
 	}
 
-	transforms, _ := transformfactory.NewSliceFromSpecs(cp.Transforms)
-	out, _ := outputfactory.NewFromSpec(cp.Output)
+	transforms, err := transformfactory.NewSliceFromSpecs(cp.Transforms)
+	if err != nil {
+		return nil, err
+	}
+	out, err := outputfactory.NewFromSpec(cp.Output)
+	if err != nil {
+		return nil, err
+	}
 	cln := cleanfactory.NewFromSpec(cp.Clean, logPath)
 
 	return runner.New(runner.Config{
@@ -252,7 +271,7 @@ func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cf
 		Output:     out,
 		Clean:      cln,
 		BatchLen:   batchLen,
-	})
+	}), nil
 }
 
 func (w *Watcher) reconcileClusterPolicies(ctx context.Context, seen map[string]bool) {
@@ -265,6 +284,13 @@ func (w *Watcher) reconcileClusterPolicies(ctx context.Context, seen map[string]
 		policy := policies.Items[i]
 		key := "ClusterLogPilotPolicy/" + policy.Name
 		current[key] = true
+		if !w.acquireClusterPolicyLease(ctx, policy.Name) {
+			if seen[key] {
+				w.stopRunner(key)
+				delete(seen, key)
+			}
+			continue
+		}
 		if seen[key] {
 			continue
 		}
@@ -306,8 +332,11 @@ func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPil
 		batchLen = 1000
 	}
 	r := runner.New(runner.Config{
-		Name:       key,
-		Input:      input.NewK8sEventInput(input.K8sEventConfig{Namespaces: namespaces}, w.client),
+		Name: key,
+		Input: input.NewK8sEventInput(input.K8sEventConfig{
+			Namespaces:          namespaces,
+			ResourceVersionPath: filepath.Join(w.cfg.MetaDir, key, "resource-version"),
+		}, w.kube),
 		Transforms: transforms,
 		Output:     out,
 		BatchLen:   batchLen,
@@ -316,11 +345,87 @@ func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPil
 	w.runners[key] = &runnerEntry{r: r}
 	w.mu.Unlock()
 	go func() {
+		ticker := time.NewTicker(time.Second)
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					w.status.UpdateRunner(key, r.Lag(), r.Sent())
+				case <-done:
+					ticker.Stop()
+					return
+				}
+			}
+		}()
 		r.Run(context.Background())
+		close(done)
 		w.status.RemoveRunner(key)
 	}()
 	w.status.UpdateRunner(key, r.Lag(), 0)
 	return true
+}
+
+func (w *Watcher) acquireClusterPolicyLease(ctx context.Context, policyName string) bool {
+	if w.cfg.Namespace == "" || w.cfg.NodeName == "" {
+		return false
+	}
+	name := dns1123Name("logpilot-cluster-policy-" + policyName)
+	now := metav1.MicroTime{Time: time.Now()}
+	duration := int32(30)
+	holder := w.cfg.NodeName
+
+	lease := &coordinationv1.Lease{}
+	err := w.client.Get(ctx, client.ObjectKey{Namespace: w.cfg.Namespace, Name: name}, lease)
+	if apierrors.IsNotFound(err) {
+		lease = &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: w.cfg.Namespace},
+			Spec: coordinationv1.LeaseSpec{
+				HolderIdentity:       &holder,
+				LeaseDurationSeconds: &duration,
+				AcquireTime:          &now,
+				RenewTime:            &now,
+			},
+		}
+		return w.client.Create(ctx, lease) == nil
+	}
+	if err != nil {
+		return false
+	}
+
+	if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != holder && lease.Spec.RenewTime != nil {
+		ttl := time.Duration(duration) * time.Second
+		if time.Since(lease.Spec.RenewTime.Time) <= ttl {
+			return false
+		}
+	}
+	lease.Spec.HolderIdentity = &holder
+	lease.Spec.LeaseDurationSeconds = &duration
+	lease.Spec.RenewTime = &now
+	if lease.Spec.AcquireTime == nil {
+		lease.Spec.AcquireTime = &now
+	}
+	return w.client.Update(ctx, lease) == nil
+}
+
+func dns1123Name(value string) string {
+	value = strings.ToLower(value)
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > validation.DNS1123LabelMaxLength {
+		out = strings.TrimRight(out[:validation.DNS1123LabelMaxLength], "-")
+	}
+	if out == "" {
+		return "logpilot-cluster-policy"
+	}
+	return out
 }
 
 func (w *Watcher) stopRunner(key string) {

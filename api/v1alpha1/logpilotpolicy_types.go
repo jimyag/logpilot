@@ -67,8 +67,9 @@ type ContainerPolicy struct {
 
 // InputSpec defines a data source.
 type InputSpec struct {
-	// Type is the input type: file, dir, k8sEvent, mongo.
+	// Type is the input type.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=file;dir;k8sEvent
 	Type string `json:"type"`
 	// +kubebuilder:default=1000
 	BatchLen int `json:"batchLen,omitempty"`
@@ -78,8 +79,9 @@ type InputSpec struct {
 
 // TransformSpec defines a data transformation step.
 type TransformSpec struct {
-	// Type is the transform type: json, label, drop, regex, multiline.
+	// Type is the transform type.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=json;label;drop
 	Type string `json:"type"`
 	// +kubebuilder:default=1000
 	BatchLen int `json:"batchLen,omitempty"`
@@ -89,8 +91,9 @@ type TransformSpec struct {
 
 // OutputSpec defines a data destination.
 type OutputSpec struct {
-	// Type is the output type: kafka, elasticsearch, http, file.
+	// Type is the output type.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=http;file
 	Type string `json:"type"`
 	// +kubebuilder:default=500
 	BatchLen int `json:"batchLen,omitempty"`

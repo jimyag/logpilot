@@ -54,12 +54,13 @@ func (r *LogPilotPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Validate: must have either (Selector + Containers) or (Input + Output).
-	hasContainers := policy.Spec.Selector != nil && len(policy.Spec.Containers) > 0
-	hasStandalone := policy.Spec.Input != nil && policy.Spec.Output != nil
-	if !hasContainers && !hasStandalone {
-		log.Error(nil, "LogPilotPolicy must define selector+containers or input+output",
-			"name", policy.Name)
+	accepted, message := validateLogPilotPolicy(&policy)
+	setLogPilotPolicyCondition(&policy, accepted, message)
+	if err := r.Status().Update(ctx, &policy); err != nil {
+		return ctrl.Result{}, err
+	}
+	if !accepted {
+		log.Error(nil, "LogPilotPolicy is invalid", "name", policy.Name, "reason", message)
 	}
 
 	return ctrl.Result{}, nil

@@ -105,6 +105,12 @@ func buildAgentDaemonSet(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Da
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 								},
 							},
+							{
+								Name: "POD_NAMESPACE",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+								},
+							},
 							{Name: "LOG_DIR", Value: logDir},
 							{Name: "META_DIR", Value: metaDir},
 						},
@@ -224,6 +230,7 @@ func buildAgentClusterRole(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRole {
 		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + agentName},
 		Rules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"pods", "events"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch"}},
 			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"clusterlogpilotpolicies"}, Verbs: []string{"get", "list", "watch"}},
 		},
 	}

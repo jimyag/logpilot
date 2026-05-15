@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,6 +45,11 @@ func main() {
 		log.Error(err, "failed to create k8s client")
 		os.Exit(1)
 	}
+	kubeClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		log.Error(err, "failed to create kubernetes client")
+		os.Exit(1)
+	}
 
 	statusSrv := status.New()
 
@@ -63,10 +69,11 @@ func main() {
 
 	w := watcher.New(watcher.Config{
 		NodeName:  nodeName,
+		Namespace: envOrDefault("POD_NAMESPACE", "default"),
 		LogDir:    envOrDefault("LOG_DIR", "/var/log/log-pilot"),
 		ConfigDir: envOrDefault("CONFIG_DIR", "/var/lib/log-pilot-agent/conf"),
 		MetaDir:   envOrDefault("META_DIR", "/var/lib/log-pilot-agent/meta"),
-	}, c, statusSrv)
+	}, c, kubeClient, statusSrv)
 
 	log.Info("log-pilot-agent started", "node", nodeName, "statusAddr", statusAddr)
 

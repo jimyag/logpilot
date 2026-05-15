@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ type mockInput struct {
 	records []input.Record
 	pos     int32
 	lag     int64
+	commits int64
 }
 
 func (m *mockInput) ReadBatch(ctx context.Context, size int) ([]input.Record, error) {
@@ -37,7 +39,11 @@ func (m *mockInput) ReadBatch(ctx context.Context, size int) ([]input.Record, er
 	return batch, nil
 }
 
-func (m *mockInput) Lag() int64   { return atomic.LoadInt64(&m.lag) }
+func (m *mockInput) Lag() int64 { return atomic.LoadInt64(&m.lag) }
+func (m *mockInput) Commit() error {
+	atomic.AddInt64(&m.commits, 1)
+	return nil
+}
 func (m *mockInput) Close() error { return nil }
 
 // mockOutput collects received records.
@@ -52,6 +58,21 @@ func (m *mockOutput) WriteBatch(_ context.Context, records []input.Record) error
 func (m *mockOutput) Close() error { return nil }
 
 var _ output.Output = (*mockOutput)(nil)
+
+type flakyOutput struct {
+	failures int32
+	received []input.Record
+}
+
+func (f *flakyOutput) WriteBatch(_ context.Context, records []input.Record) error {
+	if atomic.AddInt32(&f.failures, -1) >= 0 {
+		return errors.New("temporary output failure")
+	}
+	f.received = append(f.received, records...)
+	return nil
+}
+
+func (f *flakyOutput) Close() error { return nil }
 
 func TestRunnerProcessesAllRecords(t *testing.T) {
 	records := []input.Record{
@@ -106,5 +127,23 @@ func TestRunnerLag(t *testing.T) {
 	r := New(Config{Input: in, BatchLen: 1})
 	if r.Lag() != 42 {
 		t.Fatalf("expected lag 42, got %d", r.Lag())
+	}
+}
+
+func TestRunnerRetriesOutputBeforeCommit(t *testing.T) {
+	records := []input.Record{{Data: []byte("line1")}}
+	in := &mockInput{records: records, lag: int64(len(records))}
+	out := &flakyOutput{failures: 1}
+
+	r := New(Config{Input: in, Output: out, BatchLen: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	r.Run(ctx)
+
+	if len(out.received) != 1 {
+		t.Fatalf("expected record after retry, got %d", len(out.received))
+	}
+	if atomic.LoadInt64(&in.commits) == 0 {
+		t.Fatal("expected input commit after successful output")
 	}
 }

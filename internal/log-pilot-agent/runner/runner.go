@@ -26,6 +26,7 @@ type Runner struct {
 	cfg     Config
 	stopped int32         // atomic flag for graceful shutdown
 	done    chan struct{} // closed when Run() returns, for callers to wait on
+	sent    int64
 }
 
 // New creates a Runner from the given Config.
@@ -61,9 +62,13 @@ func (r *Runner) Run(ctx context.Context) {
 		if len(records) == 0 {
 			continue
 		}
-		if r.cfg.Output != nil {
-			_ = r.cfg.Output.WriteBatch(ctx, records)
+		if err := r.writeBatch(ctx, records, true); err != nil {
+			break
 		}
+		if r.cfg.Input != nil {
+			_ = r.cfg.Input.Commit()
+		}
+		atomic.AddInt64(&r.sent, int64(len(records)))
 	}
 	r.shutdown()
 }
@@ -79,6 +84,9 @@ func (r *Runner) Lag() int64 {
 	}
 	return r.cfg.Input.Lag()
 }
+
+// Sent returns the number of records successfully written by this runner.
+func (r *Runner) Sent() int64 { return atomic.LoadInt64(&r.sent) }
 
 // Stop signals the runner to finish the current batch and shut down.
 func (r *Runner) Stop() {
@@ -96,6 +104,29 @@ func (r *Runner) applyTransforms(ctx context.Context, records []input.Record) []
 	return records
 }
 
+func (r *Runner) writeBatch(ctx context.Context, records []input.Record, stopAware bool) error {
+	if r.cfg.Output == nil || len(records) == 0 {
+		return nil
+	}
+	backoff := 200 * time.Millisecond
+	for {
+		if stopAware && atomic.LoadInt32(&r.stopped) > 0 {
+			return context.Canceled
+		}
+		if err := r.cfg.Output.WriteBatch(ctx, records); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
 // shutdown drains remaining buffered input, flushes output, and commits all offsets.
 func (r *Runner) shutdown() {
 	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -107,8 +138,12 @@ func (r *Runner) shutdown() {
 				break
 			}
 			records = r.applyTransforms(drainCtx, records)
-			if len(records) > 0 && r.cfg.Output != nil {
-				_ = r.cfg.Output.WriteBatch(drainCtx, records)
+			if len(records) > 0 {
+				if err := r.writeBatch(drainCtx, records, false); err != nil {
+					break
+				}
+				_ = r.cfg.Input.Commit()
+				atomic.AddInt64(&r.sent, int64(len(records)))
 			}
 		}
 		r.cfg.Input.Close()

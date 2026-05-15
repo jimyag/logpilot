@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 )
@@ -24,7 +25,7 @@ type httpOutput struct {
 func NewHTTPOutput(cfg HTTPConfig) Output {
 	return &httpOutput{
 		url:    cfg.URL,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

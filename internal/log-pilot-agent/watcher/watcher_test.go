@@ -33,7 +33,10 @@ func TestBuildRunnerFileOutput(t *testing.T) {
 		MetaDir: t.TempDir(),
 	}
 
-	r := buildRunner(cp, logPath, "test-uid", cfg)
+	r, err := buildRunner(cp, logPath, "test-uid", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r == nil {
 		t.Fatal("expected non-nil runner")
 	}
@@ -66,21 +69,28 @@ func TestBuildRunnerWithTransforms(t *testing.T) {
 		},
 	}
 
-	r := buildRunner(cp, logPath, "test-uid", Config{MetaDir: t.TempDir()})
+	r, err := buildRunner(cp, logPath, "test-uid", Config{MetaDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r == nil {
 		t.Fatal("expected non-nil runner")
 	}
 }
 
 func TestBuildRunnerNoOutput(t *testing.T) {
-	// Missing output config should return a minimal runner, not panic.
+	// Missing output config should be surfaced instead of starting a runner
+	// that reads logs without sending them anywhere.
 	cp := logpilotv1alpha1.ContainerPolicy{
 		Name:    "app",
 		LogType: "applog",
 		Output:  logpilotv1alpha1.OutputSpec{Type: "unknown"},
 	}
-	r := buildRunner(cp, t.TempDir(), "test-uid", Config{MetaDir: t.TempDir()})
-	if r == nil {
-		t.Fatal("expected non-nil runner even with bad output config")
+	r, err := buildRunner(cp, t.TempDir(), "test-uid", Config{MetaDir: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected bad output config to fail")
+	}
+	if r != nil {
+		t.Fatal("expected nil runner for bad output config")
 	}
 }

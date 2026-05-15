@@ -12,6 +12,7 @@ type Record struct {
 // Input reads records from a source in batches.
 type Input interface {
 	ReadBatch(ctx context.Context, size int) ([]Record, error)
+	Commit() error
 	Lag() int64
 	Close() error
 }

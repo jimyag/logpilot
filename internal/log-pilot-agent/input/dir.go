@@ -102,9 +102,6 @@ func (d *dirInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 		if line != "" {
 			records = append(records, Record{Data: []byte(line)})
 			d.readCount++
-			if d.readCount%d.cfg.OffsetCommitEvery == 0 {
-				d.commitState()
-			}
 		}
 		if err == io.EOF {
 			// No new data: try to advance to next file.
@@ -119,6 +116,11 @@ func (d *dirInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 }
 
 func (d *dirInput) Lag() int64 { return atomic.LoadInt64(&d.lag) }
+
+func (d *dirInput) Commit() error {
+	d.commitState()
+	return nil
+}
 
 func (d *dirInput) Close() error {
 	atomic.StoreInt32(&d.stopped, 1)
