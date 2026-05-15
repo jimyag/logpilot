@@ -1,34 +1,107 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/name: logpilot
-    app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
-# CRD resources
-- apiGroups: ["logpilot.logpilot.jimyag.com"]
-  resources: ["logpilots", "logpilotpolicies", "clusterlogpilotpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["logpilot.logpilot.jimyag.com"]
-  resources: ["logpilots/status", "logpilotpolicies/status", "clusterlogpilotpolicies/status"]
-  verbs: ["get", "update", "patch"]
-- apiGroups: ["logpilot.logpilot.jimyag.com"]
-  resources: ["logpilots/finalizers", "logpilotpolicies/finalizers", "clusterlogpilotpolicies/finalizers"]
-  verbs: ["update"]
-# Pod watching (for agent)
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
-# Deployments and DaemonSets (operator deploys api + agent)
-- apiGroups: ["apps"]
-  resources: ["deployments", "daemonsets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-# Events
-- apiGroups: [""]
-  resources: ["events"]
-  verbs: ["get", "list", "watch"]
-# Leader election
-- apiGroups: ["coordination.k8s.io"]
-  resources: ["leases"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - events
+  - pods
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - logpilot.logpilot.jimyag.com
+  resources:
+  - clusterlogpilotpolicies
+  - logpilotpolicies
+  - logpilots
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - logpilot.logpilot.jimyag.com
+  resources:
+  - clusterlogpilotpolicies/finalizers
+  - logpilotpolicies/finalizers
+  - logpilots/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - logpilot.logpilot.jimyag.com
+  resources:
+  - clusterlogpilotpolicies/status
+  - logpilotpolicies/status
+  - logpilots/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

@@ -71,7 +71,7 @@ type InputSpec struct {
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 	// +kubebuilder:default=1000
-	BatchLen int                             `json:"batchLen,omitempty"`
+	BatchLen int `json:"batchLen,omitempty"`
 	// +optional
 	Config map[string]apiextensionsv1.JSON `json:"config,omitempty"`
 }
@@ -82,7 +82,7 @@ type TransformSpec struct {
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 	// +kubebuilder:default=1000
-	BatchLen int                             `json:"batchLen,omitempty"`
+	BatchLen int `json:"batchLen,omitempty"`
 	// +optional
 	Config map[string]apiextensionsv1.JSON `json:"config,omitempty"`
 }
@@ -97,7 +97,7 @@ type OutputSpec struct {
 	// +kubebuilder:default=5242880
 	BatchSize int `json:"batchSize,omitempty"`
 	// +kubebuilder:default=300
-	BatchInterval int                             `json:"batchInterval,omitempty"`
+	BatchInterval int `json:"batchInterval,omitempty"`
 	// +optional
 	Config map[string]apiextensionsv1.JSON `json:"config,omitempty"`
 }

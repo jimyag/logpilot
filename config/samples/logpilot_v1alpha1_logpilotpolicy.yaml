@@ -1,4 +1,4 @@
-apiVersion: logpilot.jimyag.com/v1alpha1
+apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
 kind: LogPilotPolicy
 metadata:
   name: my-app-logs

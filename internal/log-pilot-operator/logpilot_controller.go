@@ -23,10 +23,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
+
+const logPilotFinalizer = "logpilot.logpilot.jimyag.com/finalizer"
 
 // LogPilotReconciler reconciles a LogPilot object
 type LogPilotReconciler struct {
@@ -37,6 +40,11 @@ type LogPilotReconciler struct {
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=logpilot.logpilot.jimyag.com,resources=logpilots/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods;services;serviceaccounts;secrets;configmaps;events,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -55,6 +63,26 @@ func (r *LogPilotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if !lp.ObjectMeta.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&lp, logPilotFinalizer) {
+			if err := cleanupLogPilot(ctx, r.Client, &lp); err != nil {
+				log.Error(err, "Failed to clean up LogPilot resources")
+				return ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(&lp, logPilotFinalizer)
+			return ctrl.Result{}, r.Update(ctx, &lp)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(&lp, logPilotFinalizer) {
+		controllerutil.AddFinalizer(&lp, logPilotFinalizer)
+		if err := r.Update(ctx, &lp); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	apiImage := os.Getenv("LOG_PILOT_API_IMAGE")
 	if apiImage == "" {
 		apiImage = "ghcr.io/jimyag/logpilot/log-pilot-api:latest"
@@ -62,6 +90,18 @@ func (r *LogPilotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	agentImage := os.Getenv("LOG_PILOT_AGENT_IMAGE")
 	if agentImage == "" {
 		agentImage = "ghcr.io/jimyag/logpilot/log-pilot-agent:latest"
+	}
+
+	for _, obj := range buildSupportObjects(&lp) {
+		if obj.GetNamespace() != "" {
+			if err := ctrl.SetControllerReference(&lp, obj, r.Scheme); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		if err := reconcileObject(ctx, r.Client, obj); err != nil {
+			log.Error(err, "Failed to reconcile support object", "kind", obj.GetObjectKind(), "name", obj.GetName())
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Reconcile log-pilot-api Deployment.

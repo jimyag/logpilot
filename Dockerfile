@@ -17,5 +17,4 @@ FROM gcr.io/distroless/static:nonroot
 
 COPY --from=builder /app/bin/ /usr/local/bin/
 
-# Update the entrypoint to match your binary name
-ENTRYPOINT ["/usr/local/bin/template-repository"]
+ENTRYPOINT ["/usr/local/bin/log-pilot-operator"]

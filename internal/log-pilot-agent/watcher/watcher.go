@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -65,13 +66,15 @@ func (w *Watcher) Start(ctx context.Context) error {
 	defer ticker.Stop()
 
 	seen := make(map[string]bool)
+	clusterSeen := make(map[string]bool)
+	_ = w.reconcile(ctx, seen, clusterSeen)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := w.reconcile(ctx, seen); err != nil {
+			if err := w.reconcile(ctx, seen, clusterSeen); err != nil {
 				continue
 			}
 		}
@@ -79,7 +82,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 }
 
 // reconcile lists pods on this node, starts runners for new pods, and cleans up deleted ones.
-func (w *Watcher) reconcile(ctx context.Context, seen map[string]bool) error {
+func (w *Watcher) reconcile(ctx context.Context, seen, clusterSeen map[string]bool) error {
 	podList := &corev1.PodList{}
 	if err := w.client.List(ctx, podList,
 		client.MatchingFieldsSelector{
@@ -93,8 +96,9 @@ func (w *Watcher) reconcile(ctx context.Context, seen map[string]bool) error {
 		uid := string(pod.UID)
 		current[uid] = true
 		if !seen[uid] {
-			seen[uid] = true
-			w.OnPodAdd(pod.DeepCopy())
+			if w.OnPodAdd(pod.DeepCopy()) {
+				seen[uid] = true
+			}
 		}
 	}
 
@@ -105,20 +109,30 @@ func (w *Watcher) reconcile(ctx context.Context, seen map[string]bool) error {
 			w.onPodDeleted(uid)
 		}
 	}
+	w.reconcileClusterPolicies(ctx, clusterSeen)
 	return nil
 }
 
 // OnPodAdd starts runners for a pod that has the log policy annotation.
-func (w *Watcher) OnPodAdd(pod *corev1.Pod) {
+func (w *Watcher) OnPodAdd(pod *corev1.Pod) bool {
 	policies, err := parsePoliciesFromPod(pod)
 	if err != nil || len(policies) == 0 {
-		return
+		return true
 	}
+	allReady := true
 	for _, cp := range policies {
 		key := runnerKey(string(pod.UID), cp.Name, cp.LogType)
 		logPath := w.logPath(pod, cp)
 
+		w.mu.Lock()
+		_, exists := w.runners[key]
+		w.mu.Unlock()
+		if exists {
+			continue
+		}
+
 		if err := ensureLogPath(pod, cp, logPath); err != nil {
+			allReady = false
 			continue
 		}
 
@@ -152,6 +166,7 @@ func (w *Watcher) OnPodAdd(pod *corev1.Pod) {
 
 		w.status.UpdateRunner(key, r.Lag(), 0)
 	}
+	return allReady
 }
 
 // onPodDeleted stops runners for a deleted pod and schedules log dir cleanup.
@@ -238,6 +253,104 @@ func buildRunner(cp logpilotv1alpha1.ContainerPolicy, logPath, podUID string, cf
 		Clean:      cln,
 		BatchLen:   batchLen,
 	})
+}
+
+func (w *Watcher) reconcileClusterPolicies(ctx context.Context, seen map[string]bool) {
+	var policies logpilotv1alpha1.ClusterLogPilotPolicyList
+	if err := w.client.List(ctx, &policies); err != nil {
+		return
+	}
+	current := make(map[string]bool, len(policies.Items))
+	for i := range policies.Items {
+		policy := policies.Items[i]
+		key := "ClusterLogPilotPolicy/" + policy.Name
+		current[key] = true
+		if seen[key] {
+			continue
+		}
+		if w.startClusterPolicyRunner(policy, key) {
+			seen[key] = true
+		}
+	}
+	for key := range seen {
+		if current[key] {
+			continue
+		}
+		w.stopRunner(key)
+		delete(seen, key)
+	}
+}
+
+func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPilotPolicy, key string) bool {
+	if policy.Spec.Input.Type != "k8sEvent" {
+		return true
+	}
+	w.mu.Lock()
+	if _, exists := w.runners[key]; exists {
+		w.mu.Unlock()
+		return true
+	}
+	w.mu.Unlock()
+
+	namespaces := extractStringSlice(policy.Spec.Input.Config, "namespaces")
+	transforms, err := transformfactory.NewSliceFromSpecs(policy.Spec.Transforms)
+	if err != nil {
+		return false
+	}
+	out, err := outputfactory.NewFromSpec(policy.Spec.Output)
+	if err != nil {
+		return false
+	}
+	batchLen := policy.Spec.Input.BatchLen
+	if batchLen == 0 {
+		batchLen = 1000
+	}
+	r := runner.New(runner.Config{
+		Name:       key,
+		Input:      input.NewK8sEventInput(input.K8sEventConfig{Namespaces: namespaces}, w.client),
+		Transforms: transforms,
+		Output:     out,
+		BatchLen:   batchLen,
+	})
+	w.mu.Lock()
+	w.runners[key] = &runnerEntry{r: r}
+	w.mu.Unlock()
+	go func() {
+		r.Run(context.Background())
+		w.status.RemoveRunner(key)
+	}()
+	w.status.UpdateRunner(key, r.Lag(), 0)
+	return true
+}
+
+func (w *Watcher) stopRunner(key string) {
+	w.mu.Lock()
+	entry, ok := w.runners[key]
+	if ok {
+		delete(w.runners, key)
+	}
+	w.mu.Unlock()
+	if !ok {
+		return
+	}
+	entry.r.Stop()
+	select {
+	case <-entry.r.Done():
+	case <-time.After(30 * time.Second):
+	}
+	w.status.RemoveRunner(key)
+}
+
+func extractStringSlice(config map[string]apiextensionsv1.JSON, key string) []string {
+	v, ok := config[key]
+	if !ok {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal(v.Raw, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // PodLogDir returns the top-level log directory for a pod.

@@ -37,18 +37,18 @@ type dirOffsetState struct {
 }
 
 type dirInput struct {
-	cfg         DirConfig
-	currentF    *os.File
-	currentFile string
+	cfg          DirConfig
+	currentF     *os.File
+	currentFile  string
 	currentInode uint64
-	offset      int64
-	reader      *bufio.Reader // bufio.Reader re-tries on EOF; Scanner does not
-	doneInodes  map[string]int64
-	includeRe   []interface{ MatchString(string) bool }
-	excludeRe   []interface{ MatchString(string) bool }
-	stopped     int32 // atomic
-	lag         int64 // atomic
-	readCount   int
+	offset       int64
+	reader       *bufio.Reader // bufio.Reader re-tries on EOF; Scanner does not
+	doneInodes   map[string]int64
+	includeRe    []interface{ MatchString(string) bool }
+	excludeRe    []interface{ MatchString(string) bool }
+	stopped      int32 // atomic
+	lag          int64 // atomic
+	readCount    int
 }
 
 // NewDirInput creates an Input that reads log files from a directory in

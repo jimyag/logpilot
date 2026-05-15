@@ -1,4 +1,4 @@
-apiVersion: logpilot.jimyag.com/v1alpha1
+apiVersion: logpilot.logpilot.jimyag.com/v1alpha1
 kind: ClusterLogPilotPolicy
 metadata:
   name: k8s-events

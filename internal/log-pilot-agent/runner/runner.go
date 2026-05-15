@@ -24,7 +24,7 @@ type Config struct {
 // Runner executes an Input→Transform→Output→Clean pipeline.
 type Runner struct {
 	cfg     Config
-	stopped int32    // atomic flag for graceful shutdown
+	stopped int32         // atomic flag for graceful shutdown
 	done    chan struct{} // closed when Run() returns, for callers to wait on
 }
 
