@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
@@ -105,5 +106,87 @@ func TestNewFromSpecDefaultsToAfterCollected(t *testing.T) {
 	// Empty dir → no files → ShouldClean=false
 	if should {
 		t.Fatal("expected false for empty dir")
+	}
+}
+
+func TestAfterCollectedShouldCleanLagPositive(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "afterCollected"}, dir)
+	should, err := c.ShouldClean(RunnerMeta{Lag: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if should {
+		t.Fatal("expected ShouldClean=false when lag is positive")
+	}
+}
+
+func TestAfterCollectedShouldCleanDirNotExist(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "afterCollected"}, dir)
+
+	should, err := c.ShouldClean(RunnerMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if should {
+		t.Fatal("expected ShouldClean=false when dir does not exist")
+	}
+}
+
+func TestRetainCleanCleanDeletesOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	oldFiles := []string{"old-1.log", "old-2.log"}
+	for _, name := range append(oldFiles, "new.log") {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	oldTime := time.Now().AddDate(0, 0, -20)
+	for _, name := range oldFiles {
+		if err := os.Chtimes(filepath.Join(dir, name), oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 7}, dir)
+	if err := c.Clean(RunnerMeta{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range oldFiles {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be deleted, got err=%v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.log")); err != nil {
+		t.Fatalf("expected new.log to be retained, got err=%v", err)
+	}
+}
+
+func TestRetainCleanShouldCleanWithOldFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.log")
+	if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldTime := time.Now().AddDate(0, 0, -20)
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 7}, dir)
+	should, err := c.ShouldClean(RunnerMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !should {
+		t.Fatal("expected ShouldClean=true when old files exceed retain period")
 	}
 }

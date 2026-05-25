@@ -10,6 +10,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -103,5 +105,112 @@ func TestK8sObjectStateInputSnapshotsWorkloads(t *testing.T) {
 		if !kinds[kind] {
 			t.Fatalf("expected %s snapshot, got %v", kind, kinds)
 		}
+	}
+}
+
+func TestK8sObjectStateInputLag(t *testing.T) {
+	in := &k8sObjectStateInput{}
+	if got := in.Lag(); got != 0 {
+		t.Fatalf("expected zero lag, got %d", got)
+	}
+}
+
+func TestK8sObjectStateInputCommit(t *testing.T) {
+	in := &k8sObjectStateInput{}
+	if err := in.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+}
+
+func TestHandleObjectPod(t *testing.T) {
+	assertHandleObjectEnqueues(t, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"}}, "Pod")
+}
+
+func TestHandleObjectNode(t *testing.T) {
+	assertHandleObjectEnqueues(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "Node")
+}
+
+func TestHandleObjectDeployment(t *testing.T) {
+	assertHandleObjectEnqueues(t, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy", Namespace: "default"}}, "Deployment")
+}
+
+func TestHandleObjectStatefulSet(t *testing.T) {
+	assertHandleObjectEnqueues(t, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "sts", Namespace: "default"}}, "StatefulSet")
+}
+
+func TestHandleObjectDaemonSet(t *testing.T) {
+	assertHandleObjectEnqueues(t, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "ds", Namespace: "default"}}, "DaemonSet")
+}
+
+func TestHandleObjectJob(t *testing.T) {
+	assertHandleObjectEnqueues(t, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "default"}}, "Job")
+}
+
+func TestHandleObjectUnknown(t *testing.T) {
+	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)}
+	in.handleObject(context.Background(), watch.Event{Type: watch.Added, Object: &metav1.Status{Status: metav1.StatusSuccess}})
+
+	select {
+	case record := <-in.queue:
+		t.Fatalf("unexpected record for unknown object: %+v", record)
+	default:
+	}
+}
+
+func TestContainerStateFinished(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC))
+	finishedAt := metav1.NewTime(time.Date(2024, time.January, 2, 3, 5, 6, 0, time.UTC))
+
+	state := containerState(corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{
+			Reason:     "Completed",
+			Message:    "finished cleanly",
+			ExitCode:   42,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+		},
+	})
+
+	if got := state["state"]; got != "terminated" {
+		t.Fatalf("expected terminated state, got %v", got)
+	}
+	if got := state["exitCode"]; got != int32(42) {
+		t.Fatalf("expected exit code 42, got %v", got)
+	}
+	if got := state["startedAt"]; got != startedAt.Time.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected startedAt: %v", got)
+	}
+	if got := state["finishedAt"]; got != finishedAt.Time.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected finishedAt: %v", got)
+	}
+}
+
+func assertHandleObjectEnqueues(t *testing.T, obj runtime.Object, wantKind string) {
+	t.Helper()
+
+	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)}
+	in.handleObject(context.Background(), watch.Event{Type: watch.Added, Object: obj})
+
+	select {
+	case record := <-in.queue:
+		if got := record.Meta["kind"]; got != wantKind {
+			t.Fatalf("expected record kind %q, got %q", wantKind, got)
+		}
+		if got := record.Meta["action"]; got != string(watch.Added) {
+			t.Fatalf("expected action %q, got %q", watch.Added, got)
+		}
+
+		var payload map[string]interface{}
+		if err := json.Unmarshal(record.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload["kind"]; got != wantKind {
+			t.Fatalf("expected payload kind %q, got %v", wantKind, got)
+		}
+		if got := payload["action"]; got != string(watch.Added) {
+			t.Fatalf("expected payload action %q, got %v", watch.Added, got)
+		}
+	default:
+		t.Fatalf("expected %s record to be enqueued", wantKind)
 	}
 }

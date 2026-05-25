@@ -3,9 +3,11 @@ package output
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
@@ -64,7 +66,10 @@ func TestHTTPOutput(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := NewHTTPOutput(HTTPConfig{URL: srv.URL})
+	out, err := NewHTTPOutput(HTTPConfig{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
 	records := []input.Record{
 		{Data: []byte("log line"), Meta: map[string]string{"ns": "default"}},
 	}
@@ -86,10 +91,98 @@ func TestHTTPOutputError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := NewHTTPOutput(HTTPConfig{URL: srv.URL})
-	err := out.WriteBatch(context.Background(), []input.Record{{Data: []byte("x")}})
+	out, err := NewHTTPOutput(HTTPConfig{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = out.WriteBatch(context.Background(), []input.Record{{Data: []byte("x")}})
 	if err == nil {
 		t.Fatal("expected error on 500 response")
+	}
+}
+
+func TestNewHTTPOutputWithTLSCACert(t *testing.T) {
+	out, err := NewHTTPOutput(HTTPConfig{
+		URL:       "https://example.com",
+		TLSCACert: mustTLSCACertPEM(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	httpOut, ok := out.(*httpOutput)
+	if !ok {
+		t.Fatalf("expected *httpOutput, got %T", out)
+	}
+	transport, ok := httpOut.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpOut.client.Transport)
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatal("expected RootCAs to be configured")
+	}
+}
+
+func TestHTTPOutputClose(t *testing.T) {
+	out, err := NewHTTPOutput(HTTPConfig{URL: "http://example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPOutputWithHeaders(t *testing.T) {
+	authCh := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authCh <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	out, err := NewHTTPOutput(HTTPConfig{
+		URL:     srv.URL,
+		Headers: map[string]string{"Authorization": "Bearer token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := out.WriteBatch(context.Background(), []input.Record{{Data: []byte("x")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-authCh; got != "Bearer token" {
+		t.Fatalf("expected Authorization header to be forwarded, got %q", got)
+	}
+}
+
+func TestFileOutputCloseNilFile(t *testing.T) {
+	out := NewFileOutput(filepath.Join(t.TempDir(), "out.json"))
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFileOutputCloseAfterWrite(t *testing.T) {
+	out := &fileOutput{path: filepath.Join(t.TempDir(), "out.json")}
+	if err := out.WriteBatch(context.Background(), []input.Record{{Data: []byte("hello")}}); err != nil {
+		t.Fatal(err)
+	}
+	if out.f == nil {
+		t.Fatal("expected file to be opened during write")
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.f.Write([]byte("x")); err == nil {
+		t.Fatal("expected write to closed file to fail")
+	}
+}
+
+func TestFileOutputWriteBatchOpenError(t *testing.T) {
+	out := &fileOutput{path: t.TempDir()}
+	if err := out.WriteBatch(context.Background(), []input.Record{{Data: []byte("x")}}); err == nil {
+		t.Fatal("expected error when opening directory as output file")
 	}
 }
 
@@ -105,4 +198,14 @@ func splitLines(data []byte) [][]byte {
 		}
 	}
 	return lines
+}
+
+func mustTLSCACertPEM(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 }

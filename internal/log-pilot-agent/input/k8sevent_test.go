@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -87,4 +88,74 @@ func readUntil(ctx context.Context, t *testing.T, in Input, count int) []Record 
 		}
 	}
 	return records
+}
+
+func TestK8sEventInputLag(t *testing.T) {
+	in := &k8sEventInput{}
+	if got := in.Lag(); got != 0 {
+		t.Fatalf("expected zero lag, got %d", got)
+	}
+}
+
+func TestK8sEventInputCommitNoRV(t *testing.T) {
+	in := &k8sEventInput{}
+	if err := in.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+}
+
+func TestConsumeWatchChannelClosed(t *testing.T) {
+	in := &k8sEventInput{queue: make(chan Record, 1)}
+	fw := watch.NewFake()
+
+	done := make(chan struct{})
+	go func() {
+		in.consumeWatch(context.Background(), fw)
+		close(done)
+	}()
+
+	fw.Stop()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeWatch did not return after watch channel closed")
+	}
+
+	select {
+	case record := <-in.queue:
+		t.Fatalf("unexpected record after closed watch: %+v", record)
+	default:
+	}
+}
+
+func TestConsumeWatchErrorEvent(t *testing.T) {
+	in := &k8sEventInput{queue: make(chan Record, 1)}
+	fw := watch.NewFake()
+
+	done := make(chan struct{})
+	go func() {
+		in.consumeWatch(context.Background(), fw)
+		close(done)
+	}()
+
+	fw.Error(&metav1.Status{Status: metav1.StatusFailure, Message: "boom"})
+	fw.Delete(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "deleted", ResourceVersion: "99"}})
+	fw.Stop()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeWatch did not return after error watch event")
+	}
+
+	select {
+	case record := <-in.queue:
+		t.Fatalf("unexpected record after ignored watch events: %+v", record)
+	default:
+	}
+
+	if got := in.getLastResourceVersion(); got != "" {
+		t.Fatalf("expected resource version to remain empty, got %q", got)
+	}
 }

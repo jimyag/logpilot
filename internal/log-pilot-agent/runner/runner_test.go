@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jimyag/logpilot/internal/log-pilot-agent/clean"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/output"
+	"github.com/jimyag/logpilot/internal/log-pilot-agent/transform"
 )
 
 // mockInput returns a fixed set of records, then blocks.
@@ -73,6 +75,38 @@ func (f *flakyOutput) WriteBatch(_ context.Context, records []input.Record) erro
 }
 
 func (f *flakyOutput) Close() error { return nil }
+
+type mockTransform struct {
+	err     error
+	records []input.Record
+}
+
+func (m *mockTransform) Transform(_ context.Context, records []input.Record) ([]input.Record, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.records != nil {
+		return m.records, nil
+	}
+	return records, nil
+}
+
+type mockClean struct{ cleaned bool }
+
+func (c *mockClean) ShouldClean(_ clean.RunnerMeta) (bool, error) { return true, nil }
+func (c *mockClean) Clean(_ clean.RunnerMeta) error {
+	c.cleaned = true
+	return nil
+}
+
+type errorInput struct{ err error }
+
+func (e *errorInput) ReadBatch(context.Context, int) ([]input.Record, error) { return nil, e.err }
+func (e *errorInput) Lag() int64                                             { return 0 }
+func (e *errorInput) Commit() error                                          { return nil }
+func (e *errorInput) Close() error                                           { return nil }
+
+var _ transform.Transform = (*mockTransform)(nil)
 
 func TestRunnerProcessesAllRecords(t *testing.T) {
 	records := []input.Record{
@@ -145,5 +179,151 @@ func TestRunnerRetriesOutputBeforeCommit(t *testing.T) {
 	}
 	if atomic.LoadInt64(&in.commits) == 0 {
 		t.Fatal("expected input commit after successful output")
+	}
+}
+
+func TestRunnerDoneChannelClosedAfterRun(t *testing.T) {
+	r := New(Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	go r.Run(ctx)
+
+	select {
+	case <-r.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Done channel to close after Run returns")
+	}
+}
+
+func TestRunnerSentCount(t *testing.T) {
+	records := []input.Record{{Data: []byte("a")}, {Data: []byte("b")}, {Data: []byte("c")}}
+	in := &mockInput{records: records, lag: int64(len(records))}
+	out := &mockOutput{}
+
+	r := New(Config{Input: in, Output: out, BatchLen: 3})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	g := make(chan struct{})
+	go func() {
+		defer close(g)
+		r.Run(ctx)
+	}()
+	<-g
+
+	if got := r.Sent(); got != 3 {
+		t.Fatalf("expected Sent to report 3, got %d", got)
+	}
+}
+
+func TestRunnerLagNilInput(t *testing.T) {
+	if got := New(Config{}).Lag(); got != 0 {
+		t.Fatalf("expected nil input lag to be 0, got %d", got)
+	}
+}
+
+func TestRunnerApplyTransformsError(t *testing.T) {
+	records := []input.Record{{Data: []byte("line1")}}
+	in := &mockInput{records: records, lag: int64(len(records))}
+	out := &mockOutput{}
+
+	r := New(Config{
+		Input:      in,
+		Output:     out,
+		BatchLen:   1,
+		Transforms: []transform.Transform{&mockTransform{err: errors.New("transform failed")}},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	g := make(chan struct{})
+	go func() {
+		defer close(g)
+		r.Run(ctx)
+	}()
+	<-g
+
+	if len(out.received) != 0 {
+		t.Fatalf("expected records to be dropped, got %d delivered", len(out.received))
+	}
+	if atomic.LoadInt64(&in.commits) != 0 {
+		t.Fatalf("expected no commit when transform fails, got %d", atomic.LoadInt64(&in.commits))
+	}
+}
+
+func TestRunnerApplyTransformsEmpty(t *testing.T) {
+	records := []input.Record{{Data: []byte("line1")}}
+	in := &mockInput{records: records, lag: int64(len(records))}
+	out := &mockOutput{}
+
+	r := New(Config{
+		Input:      in,
+		Output:     out,
+		BatchLen:   1,
+		Transforms: []transform.Transform{&mockTransform{records: []input.Record{}}},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	g := make(chan struct{})
+	go func() {
+		defer close(g)
+		r.Run(ctx)
+	}()
+	<-g
+
+	if len(out.received) != 0 {
+		t.Fatalf("expected records to be dropped, got %d delivered", len(out.received))
+	}
+	if atomic.LoadInt64(&in.commits) != 0 {
+		t.Fatalf("expected no commit when transform returns no records, got %d", atomic.LoadInt64(&in.commits))
+	}
+}
+
+func TestRunnerApplyTransformsPassthrough(t *testing.T) {
+	records := []input.Record{{Data: []byte("line1")}}
+	r := New(Config{})
+
+	got := r.applyTransforms(context.Background(), records)
+	if len(got) != 1 || string(got[0].Data) != "line1" {
+		t.Fatalf("expected records to pass through unchanged, got %#v", got)
+	}
+}
+
+func TestRunnerStopBeforeRunImmediateShutdown(t *testing.T) {
+	r := New(Config{})
+	r.Stop()
+
+	go r.Run(context.Background())
+
+	select {
+	case <-r.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Run to exit immediately after Stop before Run")
+	}
+}
+
+func TestRunnerShutdownSkipsCleanWhenDrainFails(t *testing.T) {
+	cleaner := &mockClean{}
+	r := New(Config{
+		Input:    &errorInput{err: errors.New("drain failed")},
+		Clean:    cleaner,
+		BatchLen: 1,
+	})
+	g := make(chan struct{})
+
+	r.Stop()
+	go func() {
+		defer close(g)
+		r.Run(context.Background())
+	}()
+	<-g
+
+	if cleaner.cleaned {
+		t.Fatal("expected Clean not to be called when drain fails")
+	}
+
+	select {
+	case <-r.Done():
+	default:
+		t.Fatal("expected Done channel to be closed after shutdown")
 	}
 }

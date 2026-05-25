@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -173,3 +175,171 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 		t.Errorf("expected line3, got %q", r2[0].Data)
 	}
 }
+
+func TestDirInputLagInitial(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewDirInput(DirConfig{Dir: dir, ReadFrom: "oldest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+
+	if got := in.(*dirInput).Lag(); got < 0 {
+		t.Fatalf("expected non-negative lag, got %d", got)
+	}
+}
+
+func TestDirInputCommit(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewDirInput(DirConfig{Dir: dir, ReadFrom: "oldest", MetaPath: metaPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	di := in.(*dirInput)
+	defer di.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	batch, err := di.ReadBatch(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(batch))
+	}
+
+	if err := di.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("expected committed state file to exist: %v", err)
+	}
+}
+
+func TestDirPassesFilterIncludeOnly(t *testing.T) {
+	di := &dirInput{includeRe: compilePatternInterfaces([]string{"hello"})}
+	if !di.passesFilter("hello.log") {
+		t.Fatal("expected include filter to allow matching filename")
+	}
+	if di.passesFilter("goodbye.log") {
+		t.Fatal("expected include filter to reject non-matching filename")
+	}
+}
+
+func TestDirPassesFilterExcludeOnly(t *testing.T) {
+	di := &dirInput{excludeRe: compilePatternInterfaces([]string{"error"})}
+	if !di.passesFilter("app.log") {
+		t.Fatal("expected exclude filter to allow non-matching filename")
+	}
+	if di.passesFilter("error.log") {
+		t.Fatal("expected exclude filter to reject matching filename")
+	}
+}
+
+func TestDirPassesFilterBothIncludeExclude(t *testing.T) {
+	di := &dirInput{
+		includeRe: compilePatternInterfaces([]string{"hello"}),
+		excludeRe: compilePatternInterfaces([]string{"world"}),
+	}
+
+	if !di.passesFilter("hello.log") {
+		t.Fatal("expected include match without exclude match to pass")
+	}
+	if di.passesFilter("hello-world.log") {
+		t.Fatal("expected exclude match to win when include also matches")
+	}
+	if di.passesFilter("goodbye.log") {
+		t.Fatal("expected missing include match to fail")
+	}
+}
+
+func TestDirInputUpdateLagNilCurrentF(t *testing.T) {
+	di := &dirInput{}
+	atomic.StoreInt64(&di.lag, 17)
+
+	di.updateLag()
+
+	if got := di.Lag(); got != 17 {
+		t.Fatalf("expected lag to remain unchanged, got %d", got)
+	}
+}
+
+func TestGetInodeFromStat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := getInodeFromStat(info); got == 0 {
+		t.Fatal("expected real file stat to provide a non-zero inode")
+	}
+
+	if got := getInodeFromStat(fakeFileInfo{}); got != 0 {
+		t.Fatalf("expected fake file info to return inode 0, got %d", got)
+	}
+}
+
+func TestDirInputPruneStaleInodesRemovesMissing(t *testing.T) {
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "current.log")
+	stalePath := filepath.Join(dir, "stale.log")
+	if err := os.WriteFile(currentPath, []byte("current\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	currentInode, err := inodeFromPath(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleInode, err := inodeFromPath(stalePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stalePath); err != nil {
+		t.Fatal(err)
+	}
+
+	currentKey := strconv.FormatUint(currentInode, 10)
+	staleKey := strconv.FormatUint(staleInode, 10)
+	di := &dirInput{
+		cfg: DirConfig{Dir: dir},
+		doneInodes: map[string]int64{
+			currentKey: 12,
+			staleKey:   6,
+		},
+	}
+
+	di.pruneStaleInodes()
+
+	if _, ok := di.doneInodes[currentKey]; !ok {
+		t.Fatal("expected current inode to remain tracked")
+	}
+	if _, ok := di.doneInodes[staleKey]; ok {
+		t.Fatal("expected stale inode to be removed")
+	}
+}
+
+type fakeFileInfo struct{}
+
+func (fakeFileInfo) Name() string       { return "fake" }
+func (fakeFileInfo) Size() int64        { return 0 }
+func (fakeFileInfo) Mode() os.FileMode  { return 0 }
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fakeFileInfo) IsDir() bool        { return false }
+func (fakeFileInfo) Sys() interface{}   { return nil }
