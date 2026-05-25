@@ -35,7 +35,11 @@ type afterCollectedClean struct {
 	logDir string
 }
 
-func (c *afterCollectedClean) ShouldClean(_ RunnerMeta) (bool, error) {
+func (c *afterCollectedClean) ShouldClean(meta RunnerMeta) (bool, error) {
+	// Don't clean while there are still records waiting to be sent.
+	if meta.Lag > 0 {
+		return false, nil
+	}
 	entries, err := os.ReadDir(c.logDir)
 	if err != nil {
 		return false, nil

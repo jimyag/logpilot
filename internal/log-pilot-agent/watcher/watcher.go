@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -69,29 +70,56 @@ func New(cfg Config, c client.Client, kube kubernetes.Interface, statusSrv *stat
 
 // Start begins watching pods on this node. Blocks until ctx is cancelled.
 func (w *Watcher) Start(ctx context.Context) error {
-	// Poll pods on this node periodically.
-	// A production implementation would use an informer for efficiency.
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	seen := make(map[string]bool)
 	clusterSeen := make(map[string]bool)
-	_ = w.reconcile(ctx, seen, clusterSeen)
+
+	// Initial sync: list all existing pods before starting the watch.
+	if err := w.syncPods(ctx, seen); err != nil {
+		return err
+	}
+	w.reconcileClusterPolicies(ctx, clusterSeen)
+
+	// clusterPolicy ticker: still needs periodic refresh because ClusterPolicies
+	// are not watched here; 30 s is sufficient (lease duration is 30 s).
+	clusterTicker := time.NewTicker(30 * time.Second)
+	defer clusterTicker.Stop()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := w.reconcile(ctx, seen, clusterSeen); err != nil {
-				continue
+		watcher, err := w.kube.CoreV1().Pods(metav1.NamespaceAll).Watch(ctx,
+			metav1.ListOptions{
+				FieldSelector: "spec.nodeName=" + w.cfg.NodeName,
+			})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
 			}
+			// Transient error: back off and retry.
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(5 * time.Second):
+			}
+			continue
 		}
+
+		if err := w.consumePodWatch(ctx, watcher, seen, clusterSeen, clusterTicker.C); err != nil {
+			watcher.Stop()
+			if ctx.Err() != nil {
+				return nil
+			}
+			// Watch expired or connection dropped; relist and rewatch.
+			if syncErr := w.syncPods(ctx, seen); syncErr != nil && ctx.Err() != nil {
+				return nil
+			}
+			continue
+		}
+		watcher.Stop()
+		return nil
 	}
 }
 
-// reconcile lists pods on this node, starts runners for new pods, and cleans up deleted ones.
-func (w *Watcher) reconcile(ctx context.Context, seen, clusterSeen map[string]bool) error {
+// syncPods lists all pods on this node and starts runners for any new ones.
+func (w *Watcher) syncPods(ctx context.Context, seen map[string]bool) error {
 	podList := &corev1.PodList{}
 	if err := w.client.List(ctx, podList,
 		client.MatchingFieldsSelector{
@@ -100,8 +128,9 @@ func (w *Watcher) reconcile(ctx context.Context, seen, clusterSeen map[string]bo
 		return err
 	}
 
-	current := make(map[string]bool)
-	for _, pod := range podList.Items {
+	current := make(map[string]bool, len(podList.Items))
+	for i := range podList.Items {
+		pod := &podList.Items[i]
 		uid := string(pod.UID)
 		current[uid] = true
 		if !seen[uid] {
@@ -110,16 +139,58 @@ func (w *Watcher) reconcile(ctx context.Context, seen, clusterSeen map[string]bo
 			}
 		}
 	}
-
-	// Detect deleted pods.
+	// Clean up pods that disappeared since last sync.
 	for uid := range seen {
 		if !current[uid] {
 			delete(seen, uid)
 			w.onPodDeleted(uid)
 		}
 	}
-	w.reconcileClusterPolicies(ctx, clusterSeen)
 	return nil
+}
+
+// consumePodWatch reads events from a pod watch stream, updating seen map and
+// starting/stopping runners. Returns nil when ctx is cancelled, or an error
+// when the watch channel closes (triggering a relist+rewatch in the caller).
+func (w *Watcher) consumePodWatch(
+	ctx context.Context,
+	watcher watch.Interface,
+	seen map[string]bool,
+	clusterSeen map[string]bool,
+	clusterTick <-chan time.Time,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return fmt.Errorf("watch channel closed")
+			}
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+			uid := string(pod.UID)
+			switch event.Type {
+			case watch.Added, watch.Modified:
+				if !seen[uid] {
+					if w.OnPodAdd(pod.DeepCopy()) {
+						seen[uid] = true
+					}
+				}
+			case watch.Deleted:
+				delete(seen, uid)
+				w.onPodDeleted(uid)
+			case watch.Error:
+				return fmt.Errorf("watch error event received")
+			}
+
+		case <-clusterTick:
+			w.reconcileClusterPolicies(ctx, clusterSeen)
+		}
+	}
 }
 
 // OnPodAdd starts runners for a pod that has the log policy annotation.
@@ -188,7 +259,7 @@ func (w *Watcher) onPodDeleted(podUID string) {
 	var toDelete []string
 	var entries []*runnerEntry
 	for key, entry := range w.runners {
-		if len(key) >= len(podUID) && key[:len(podUID)] == podUID {
+		if strings.HasPrefix(key, podUID+"/") {
 			toDelete = append(toDelete, key)
 			entries = append(entries, entry)
 		}
@@ -378,41 +449,64 @@ func (w *Watcher) acquireClusterPolicyLease(ctx context.Context, policyName stri
 		return false
 	}
 	name := dns1123Name("logpilot-cluster-policy-" + policyName)
-	now := metav1.MicroTime{Time: time.Now()}
 	duration := int32(30)
 	holder := w.cfg.NodeName
 
-	lease := &coordinationv1.Lease{}
-	err := w.client.Get(ctx, client.ObjectKey{Namespace: w.cfg.Namespace, Name: name}, lease)
-	if apierrors.IsNotFound(err) {
-		lease = &coordinationv1.Lease{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: w.cfg.Namespace},
-			Spec: coordinationv1.LeaseSpec{
-				HolderIdentity:       &holder,
-				LeaseDurationSeconds: &duration,
-				AcquireTime:          &now,
-				RenewTime:            &now,
-			},
-		}
-		return w.client.Create(ctx, lease) == nil
-	}
-	if err != nil {
-		return false
-	}
+	// Retry up to 3 times to handle optimistic-concurrency conflicts (409).
+	for attempt := 0; attempt < 3; attempt++ {
+		now := metav1.MicroTime{Time: time.Now()}
 
-	if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != holder && lease.Spec.RenewTime != nil {
-		ttl := time.Duration(duration) * time.Second
-		if time.Since(lease.Spec.RenewTime.Time) <= ttl {
+		lease := &coordinationv1.Lease{}
+		err := w.client.Get(ctx, client.ObjectKey{Namespace: w.cfg.Namespace, Name: name}, lease)
+		if apierrors.IsNotFound(err) {
+			lease = &coordinationv1.Lease{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: w.cfg.Namespace},
+				Spec: coordinationv1.LeaseSpec{
+					HolderIdentity:       &holder,
+					LeaseDurationSeconds: &duration,
+					AcquireTime:          &now,
+					RenewTime:            &now,
+				},
+			}
+			createErr := w.client.Create(ctx, lease)
+			if createErr == nil {
+				return true
+			}
+			if !apierrors.IsAlreadyExists(createErr) {
+				return false
+			}
+			// Another agent created it concurrently; re-fetch and retry.
+			continue
+		}
+		if err != nil {
 			return false
 		}
+
+		// Someone else holds a non-expired lease.
+		if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != holder && lease.Spec.RenewTime != nil {
+			ttl := time.Duration(duration) * time.Second
+			if time.Since(lease.Spec.RenewTime.Time) <= ttl {
+				return false
+			}
+		}
+
+		lease.Spec.HolderIdentity = &holder
+		lease.Spec.LeaseDurationSeconds = &duration
+		lease.Spec.RenewTime = &now
+		if lease.Spec.AcquireTime == nil {
+			lease.Spec.AcquireTime = &now
+		}
+		updateErr := w.client.Update(ctx, lease)
+		if updateErr == nil {
+			return true
+		}
+		if !apierrors.IsConflict(updateErr) {
+			return false
+		}
+		// 409 Conflict: resourceVersion changed between Get and Update.
+		// Re-fetch and retry with the latest version.
 	}
-	lease.Spec.HolderIdentity = &holder
-	lease.Spec.LeaseDurationSeconds = &duration
-	lease.Spec.RenewTime = &now
-	if lease.Spec.AcquireTime == nil {
-		lease.Spec.AcquireTime = &now
-	}
-	return w.client.Update(ctx, lease) == nil
+	return false
 }
 
 func dns1123Name(value string) string {

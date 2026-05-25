@@ -53,28 +53,38 @@ func NewK8sEventInput(cfg K8sEventConfig, c kubernetes.Interface) Input {
 }
 
 func (k *k8sEventInput) run(ctx context.Context) {
-	for {
-		if err := k.listAndWatch(ctx); err != nil && ctx.Err() == nil {
-			time.Sleep(time.Second)
-			continue
-		}
-		return
-	}
-}
-
-func (k *k8sEventInput) listAndWatch(ctx context.Context) error {
 	namespaces := k.cfg.Namespaces
 	if len(namespaces) == 0 {
 		namespaces = []string{""}
 	}
-	for _, namespace := range namespaces {
-		if err := k.listNamespace(ctx, namespace); err != nil {
-			return err
-		}
-		go k.watchNamespace(ctx, namespace)
+	// Launch exactly one goroutine per namespace. Each goroutine manages its
+	// own list+watch loop with internal backoff, so restarting on error never
+	// accumulates extra goroutines.
+	var wg sync.WaitGroup
+	for _, ns := range namespaces {
+		wg.Add(1)
+		go func(namespace string) {
+			defer wg.Done()
+			k.runNamespace(ctx, namespace)
+		}(ns)
 	}
-	<-ctx.Done()
-	return ctx.Err()
+	wg.Wait()
+}
+
+// runNamespace continuously lists then watches events in one namespace.
+// It retries with a 1 s back-off on any error, and exits when ctx is done.
+func (k *k8sEventInput) runNamespace(ctx context.Context, namespace string) {
+	for ctx.Err() == nil {
+		if err := k.listNamespace(ctx, namespace); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+		// Watch until the connection closes or ctx is cancelled, then retry.
+		k.watchNamespace(ctx, namespace)
+	}
 }
 
 func (k *k8sEventInput) listNamespace(ctx context.Context, namespace string) error {

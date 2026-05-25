@@ -401,6 +401,7 @@ func (d *dirInput) updateLag() {
 // commitState atomically writes current read state to MetaPath.
 func (d *dirInput) commitState() {
 	d.updateLag()
+	d.pruneStaleInodes()
 	if d.cfg.MetaPath == "" {
 		return
 	}
@@ -439,6 +440,34 @@ func (d *dirInput) loadState() {
 	d.offset = state.Offset
 	if state.DoneInodes != nil {
 		d.doneInodes = state.DoneInodes
+	}
+}
+
+// pruneStaleInodes removes entries from doneInodes that no longer correspond
+// to any file currently in the directory. This prevents unbounded memory and
+// state-file growth when logs are frequently rotated.
+func (d *dirInput) pruneStaleInodes() {
+	if len(d.doneInodes) == 0 {
+		return
+	}
+	entries, err := os.ReadDir(d.cfg.Dir)
+	if err != nil {
+		return
+	}
+	currentInodes := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		path := filepath.Join(d.cfg.Dir, e.Name())
+		if inode, err := inodeFromPath(path); err == nil {
+			currentInodes[fmt.Sprintf("%d", inode)] = true
+		}
+	}
+	for key := range d.doneInodes {
+		if !currentInodes[key] {
+			delete(d.doneInodes, key)
+		}
 	}
 }
 

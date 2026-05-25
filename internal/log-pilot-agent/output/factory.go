@@ -17,7 +17,19 @@ func NewFromSpec(spec logpilotv1alpha1.OutputSpec) (Output, error) {
 		if err != nil {
 			return nil, fmt.Errorf("http output: %w", err)
 		}
-		return NewHTTPOutput(HTTPConfig{URL: url}), nil
+		cfg := HTTPConfig{URL: url}
+		// Optional: custom request headers (e.g. Authorization).
+		if headers, err := extractStringMap(spec.Config, "headers"); err == nil {
+			cfg.Headers = headers
+		}
+		// Optional: TLS settings.
+		if skip, err := extractBool(spec.Config, "tlsSkipVerify"); err == nil {
+			cfg.TLSSkipVerify = skip
+		}
+		if ca, err := extractString(spec.Config, "tlsCACert"); err == nil {
+			cfg.TLSCACert = ca
+		}
+		return NewHTTPOutput(cfg)
 
 	case "file":
 		path, err := extractString(spec.Config, "path")
@@ -41,4 +53,28 @@ func extractString(config map[string]apiextensionsv1.JSON, key string) (string, 
 		return "", fmt.Errorf("config key %q: %w", key, err)
 	}
 	return s, nil
+}
+
+func extractStringMap(config map[string]apiextensionsv1.JSON, key string) (map[string]string, error) {
+	v, ok := config[key]
+	if !ok {
+		return nil, fmt.Errorf("missing config key %q", key)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(v.Raw, &m); err != nil {
+		return nil, fmt.Errorf("config key %q: %w", key, err)
+	}
+	return m, nil
+}
+
+func extractBool(config map[string]apiextensionsv1.JSON, key string) (bool, error) {
+	v, ok := config[key]
+	if !ok {
+		return false, fmt.Errorf("missing config key %q", key)
+	}
+	var b bool
+	if err := json.Unmarshal(v.Raw, &b); err != nil {
+		return false, fmt.Errorf("config key %q: %w", key, err)
+	}
+	return b, nil
 }

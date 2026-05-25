@@ -74,7 +74,8 @@ func NewFileInput(cfg FileConfig, metaDir string) (Input, error) {
 		seekInfo = &tail.SeekInfo{Offset: 0, Whence: 0}
 	}
 	// Restore saved offset if available — overrides readFrom.
-	if savedOffset := loadOffset(cfg.MetaPath); savedOffset >= 0 {
+	savedOffset := loadOffset(cfg.MetaPath)
+	if savedOffset >= 0 {
 		seekInfo = &tail.SeekInfo{Offset: savedOffset, Whence: 0}
 	}
 
@@ -97,7 +98,21 @@ func NewFileInput(cfg FileConfig, metaDir string) (Input, error) {
 	}
 
 	if info, err := os.Stat(cfg.Path); err == nil {
-		atomic.StoreInt64(&fi.lag, info.Size())
+		// Compute initial lag as bytes remaining from the starting position.
+		var startOffset int64
+		switch {
+		case savedOffset >= 0:
+			startOffset = savedOffset
+		case cfg.ReadFrom == "newest":
+			startOffset = info.Size() // starting from end: lag == 0
+		default: // oldest
+			startOffset = 0
+		}
+		lag := info.Size() - startOffset
+		if lag < 0 {
+			lag = 0
+		}
+		atomic.StoreInt64(&fi.lag, lag)
 	}
 
 	return fi, nil

@@ -11,6 +11,9 @@ type RunnerMeta struct {
 	ContainerName string
 	LogType       string
 	DeletedAt     time.Time // zero if pod is still running
+	// Lag is the number of unread bytes/records remaining in the input.
+	// A non-zero value means collection is not yet complete.
+	Lag int64
 }
 
 // Clean manages log file cleanup while a pod is running.
