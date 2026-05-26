@@ -31,6 +31,8 @@ linters:
     revive:
       rules:
         - name: comment-spacings
+          arguments:
+            - nolint
         - name: import-shadowing
     modernize:
       disable:

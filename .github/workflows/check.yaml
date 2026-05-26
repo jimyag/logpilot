@@ -19,7 +19,7 @@ jobs:
           go-version: stable
           cache-dependency-path: go.sum
       - run: go install honnef.co/go/tools/cmd/staticcheck@latest
-      - run: staticcheck ./...
+      - run: staticcheck -checks='all,-SA1019' ./...
 
   gofmt:
     runs-on: ubuntu-latest
