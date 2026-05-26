@@ -31,7 +31,9 @@ func TestAfterCollectedShouldClean(t *testing.T) {
 func TestAfterCollectedCleanRemovesFiles(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"a.log", "b.log"} {
-		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 	}
 
 	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "afterCollected"}, dir)
@@ -64,7 +66,9 @@ func TestNeverClean(t *testing.T) {
 func TestRetainCleanRetainDays0DefaultsTo7(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
-	os.WriteFile(logFile, []byte("data"), 0o644)
+	if err := os.WriteFile(logFile, []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// retainDays=0 should default to 7 days (safe default), so a just-created
 	// file should NOT be cleaned.
@@ -83,7 +87,9 @@ func TestRetainCleanRetainDays0DefaultsTo7(t *testing.T) {
 func TestRetainCleanFutureRetain(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
-	os.WriteFile(logFile, []byte("data"), 0o644)
+	if err := os.WriteFile(logFile, []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// retainDays=30 means keep files modified within last 30 days.
 	spec := logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 30}

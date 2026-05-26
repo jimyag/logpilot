@@ -184,10 +184,10 @@ func (r *Runner) shutdown() {
 		if drainCtx.Err() != nil {
 			drained = false
 		}
-		r.cfg.Input.Close()
+		_ = r.cfg.Input.Close()
 	}
 	if r.cfg.Output != nil {
-		r.cfg.Output.Close()
+		_ = r.cfg.Output.Close()
 	}
 	if r.cfg.Clean != nil && drained {
 		lag := int64(0)

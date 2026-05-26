@@ -16,10 +16,10 @@ func TestFileInputReadsLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	_, _ = f.WriteString("line1\nline2\n")
-	f.Close()
+	_ = f.Close()
 
 	in, err := NewFileInput(FileConfig{
 		Path:              f.Name(),
@@ -29,7 +29,7 @@ func TestFileInputReadsLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -66,7 +66,7 @@ func TestFileInputIncludeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -91,7 +91,7 @@ func TestFileInputExcludeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -127,12 +127,12 @@ func TestFileInputOffsetRecovery(t *testing.T) {
 		batch, _ := in1.ReadBatch(ctx1, 10)
 		records = append(records, batch...)
 	}
-	in1.Close() // forces final commitOffset
+	_ = in1.Close() // forces final commitOffset
 
 	// Append a new line after the first session ends.
 	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
-	f.WriteString("line4\n")
-	f.Close()
+	_, _ = f.WriteString("line4\n")
+	_ = f.Close()
 
 	// Second session: should resume from saved offset and only read line4.
 	in2, err := NewFileInput(FileConfig{
@@ -143,7 +143,7 @@ func TestFileInputOffsetRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in2.Close()
+	defer func() { _ = in2.Close() }()
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel2()
@@ -210,7 +210,7 @@ func TestFileInputLag(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
-	defer fi.Close()
+	defer func() { _ = fi.Close() }()
 
 	initialLag := fi.Lag()
 	if initialLag != int64(len(content)) {
@@ -251,7 +251,7 @@ func TestFileInputCommitWritesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
-	defer fi.Close()
+	defer func() { _ = fi.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -389,7 +389,7 @@ func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
-	defer fi.Close()
+	defer func() { _ = fi.Close() }()
 
 	fi.commitOffset()
 
@@ -418,7 +418,7 @@ func TestFileInputCommitOffsetMkdirAllError(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
-	defer fi.Close()
+	defer func() { _ = fi.Close() }()
 
 	fi.commitOffset()
 
@@ -443,7 +443,7 @@ func TestFileInputCommitOffsetWriteFileError(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
-	defer fi.Close()
+	defer func() { _ = fi.Close() }()
 
 	fi.commitOffset()
 
@@ -457,7 +457,7 @@ func TestFileInputReadBatchCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	for i := 0; i < 256; i++ {
+	for range 256 {
 		batch, err := fi.ReadBatch(ctx, 1)
 		if err != nil {
 			t.Fatal(err)

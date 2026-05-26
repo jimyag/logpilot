@@ -402,10 +402,10 @@ func (w *Watcher) startClusterPolicyRunner(policy logpilotv1alpha1.ClusterLogPil
 	if batchLen == 0 {
 		batchLen = 1000
 	}
-	runnerInput := input.Input(input.NewK8sEventInput(input.K8sEventConfig{
+	runnerInput := input.NewK8sEventInput(input.K8sEventConfig{
 		Namespaces:          namespaces,
 		ResourceVersionPath: filepath.Join(w.cfg.MetaDir, key, "resource-version"),
-	}, w.kube))
+	}, w.kube)
 	if policy.Spec.Input.Type == "k8sObjectState" {
 		runnerInput = input.NewK8sObjectStateInput(input.K8sObjectStateConfig{
 			Namespaces: namespaces,

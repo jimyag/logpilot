@@ -52,7 +52,7 @@ func TestBuildAPIDeploymentDefaults(t *testing.T) {
 
 	deploy := buildAPIDeployment(lp, "log-pilot-api:latest")
 
-	if deploy.Name != "log-pilot-api" {
+	if deploy.Name != apiName {
 		t.Errorf("expected name log-pilot-api, got %q", deploy.Name)
 	}
 	if deploy.Namespace != "logpilot-system" {
@@ -81,7 +81,7 @@ func TestBuildAgentDaemonSetDefaults(t *testing.T) {
 
 	ds := buildAgentDaemonSet(lp, "log-pilot-agent:latest")
 
-	if ds.Name != "log-pilot-agent" {
+	if ds.Name != agentName {
 		t.Errorf("expected name log-pilot-agent, got %q", ds.Name)
 	}
 	if ds.Namespace != "logpilot-system" {
@@ -163,7 +163,7 @@ func TestBuildAPIService(t *testing.T) {
 	if svc.Spec.Ports[0].Port != 8443 {
 		t.Fatalf("expected service port 8443, got %d", svc.Spec.Ports[0].Port)
 	}
-	if svc.Spec.Selector["app.kubernetes.io/name"] != "log-pilot-api" {
+	if svc.Spec.Selector["app.kubernetes.io/name"] != apiName {
 		t.Fatalf("expected service selector app.kubernetes.io/name=log-pilot-api, got %q", svc.Spec.Selector["app.kubernetes.io/name"])
 	}
 }
@@ -184,7 +184,7 @@ func TestBuildAPIClusterRoleBinding(t *testing.T) {
 	if len(binding.Subjects) == 0 {
 		t.Fatal("expected cluster role binding subjects")
 	}
-	if binding.Subjects[0].Name != "log-pilot-api" {
+	if binding.Subjects[0].Name != apiName {
 		t.Fatalf("expected first subject log-pilot-api, got %q", binding.Subjects[0].Name)
 	}
 }
@@ -205,7 +205,7 @@ func TestBuildAgentClusterRoleBinding(t *testing.T) {
 	if len(binding.Subjects) == 0 {
 		t.Fatal("expected cluster role binding subjects")
 	}
-	if binding.Subjects[0].Name != "log-pilot-agent" {
+	if binding.Subjects[0].Name != agentName {
 		t.Fatalf("expected first subject log-pilot-agent, got %q", binding.Subjects[0].Name)
 	}
 }
@@ -214,7 +214,7 @@ func TestBuildMutatingWebhook(t *testing.T) {
 	lp := makeLogPilot("logpilot", "default")
 
 	webhook := buildMutatingWebhook(lp)
-	if webhook.Name != "log-pilot-api" {
+	if webhook.Name != apiName {
 		t.Fatalf("expected webhook config name log-pilot-api, got %q", webhook.Name)
 	}
 	if len(webhook.Webhooks) != 1 {

@@ -148,7 +148,7 @@ func (d *dirInput) readLine() (string, int, error) {
 	// Check rotation before reading: inode change means the file was swapped.
 	if d.detectRotation() {
 		d.markCurrentDone()
-		d.currentF.Close()
+		_ = d.currentF.Close()
 		d.currentF = nil
 		d.reader = nil
 		d.currentFile = "" // must clear so advanceFile picks up new same-name file
@@ -210,14 +210,14 @@ func (d *dirInput) openFile() error {
 	if targetOffset < 0 {
 		off, err := f.Seek(0, io.SeekEnd)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		targetOffset = off
 	} else if targetOffset > 0 {
 		if _, err := f.Seek(targetOffset, io.SeekStart); err != nil {
 			// File may have been truncated; start from beginning.
-			f.Seek(0, io.SeekStart)
+			_, _ = f.Seek(0, io.SeekStart)
 			targetOffset = 0
 		}
 	}
@@ -266,7 +266,7 @@ func (d *dirInput) advanceFile() bool {
 		// Found a new file: mark current as done, open the new one.
 		if d.currentF != nil {
 			d.markCurrentDone()
-			d.currentF.Close()
+			_ = d.currentF.Close()
 			d.currentF = nil
 			d.reader = nil
 		}

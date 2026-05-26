@@ -18,8 +18,8 @@ func TestFileOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
-	f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	_ = f.Close()
 
 	out := NewFileOutput(f.Name())
 	records := []input.Record{

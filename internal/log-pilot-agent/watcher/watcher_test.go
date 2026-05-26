@@ -46,7 +46,7 @@ func newTestWatcher(t *testing.T) *Watcher {
 	return New(
 		Config{NodeName: "node1", LogDir: "/logs"},
 		clientfake.NewClientBuilder().WithScheme(scheme).Build(),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 }
@@ -491,7 +491,7 @@ func TestSyncPodsSeenPodIsSkipped(t *testing.T) {
 	w := New(
 		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
 		newIndexedPodClient(t, pod),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 	seen := map[string]bool{string(pod.UID): true}
@@ -511,7 +511,7 @@ func TestSyncPodsRemovesMissingSeenPod(t *testing.T) {
 	w := New(
 		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
 		newIndexedPodClient(t),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 	r := newRunningRunner(t)
@@ -541,7 +541,7 @@ func TestSyncPodsLeavesPodUnseenWhenRunnerNotReady(t *testing.T) {
 	w := New(
 		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
 		newIndexedPodClient(t, pod),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 	seen := make(map[string]bool)
@@ -562,7 +562,7 @@ func TestSyncPodsEmptyList(t *testing.T) {
 			return []string{obj.(*corev1.Pod).Spec.NodeName}
 		}).
 		Build()
-	w := New(Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()}, c, kubefake.NewSimpleClientset(), status.New())
+	w := New(Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()}, c, kubefake.NewSimpleClientset(), status.New()) //nolint:staticcheck
 	seen := make(map[string]bool)
 
 	if err := w.syncPods(context.Background(), seen); err != nil {
@@ -581,7 +581,7 @@ func TestSyncPodsAddsReadyPod(t *testing.T) {
 	w := New(
 		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
 		newIndexedPodClient(t, pod),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 	seen := make(map[string]bool)
@@ -806,7 +806,7 @@ func TestAcquireClusterPolicyLeaseRetriesAlreadyExists(t *testing.T) {
 			return apierrors.NewAlreadyExists(schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}, lease.Name)
 		},
 	}
-	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New())
+	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New()) //nolint:staticcheck
 
 	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); !got {
 		t.Fatal("expected already-exists retry to succeed")
@@ -842,7 +842,7 @@ func TestAcquireClusterPolicyLeaseRetriesConflict(t *testing.T) {
 			return baseClient.Update(ctx, obj, opts...)
 		},
 	}
-	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New())
+	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New()) //nolint:staticcheck
 
 	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); !got {
 		t.Fatal("expected conflict retry to succeed")
@@ -1026,7 +1026,7 @@ func TestWatcherStartContextCancel(t *testing.T) {
 		}).
 		Build()
 
-	kube := kubefake.NewSimpleClientset()
+	kube := kubefake.NewSimpleClientset() //nolint:staticcheck
 	fw := k8swatch.NewFake()
 	watchStarted := make(chan struct{})
 	once := sync.Once{}
@@ -1074,7 +1074,7 @@ func TestWatcherStartWatchChannelClosedThenCancel(t *testing.T) {
 		}).
 		Build()
 
-	kube := kubefake.NewSimpleClientset()
+	kube := kubefake.NewSimpleClientset() //nolint:staticcheck
 	callCount := 0
 	var mu sync.Mutex
 	fw1 := k8swatch.NewFake()
@@ -1141,7 +1141,7 @@ func TestWatcherStartWatchErrorThenCancel(t *testing.T) {
 		}).
 		Build()
 
-	kube := kubefake.NewSimpleClientset()
+	kube := kubefake.NewSimpleClientset() //nolint:staticcheck
 	callCount := 0
 	var mu sync.Mutex
 	fw := k8swatch.NewFake()
@@ -1268,7 +1268,7 @@ func newTestWatcherWithConfig(t *testing.T, cfg Config, objs ...runtime.Object) 
 	return New(
 		cfg,
 		clientfake.NewClientBuilder().WithScheme(newTestScheme(t)).WithRuntimeObjects(objs...).Build(),
-		kubefake.NewSimpleClientset(),
+		kubefake.NewSimpleClientset(), //nolint:staticcheck
 		status.New(),
 	)
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 )
 
-func makeJSON(v interface{}) apiextensionsv1.JSON {
+func makeJSON(v any) apiextensionsv1.JSON {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		panic(err)

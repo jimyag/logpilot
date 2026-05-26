@@ -14,9 +14,13 @@ import (
 func TestDirInputReadsFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Write two files.
-	os.WriteFile(filepath.Join(dir, "a.log"), []byte("line1\nline2\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.log"), []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(5 * time.Millisecond) // ensure different mod times
-	os.WriteFile(filepath.Join(dir, "b.log"), []byte("line3\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "b.log"), []byte("line3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	in, err := NewDirInput(DirConfig{
 		Dir:               dir,
@@ -26,7 +30,7 @@ func TestDirInputReadsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -53,8 +57,12 @@ func TestDirInputReadsFiles(t *testing.T) {
 
 func TestDirInputFilterExclude(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "app.log"), []byte("hello\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "app.pid"), []byte("12345\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app.pid"), []byte("12345\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	in, err := NewDirInput(DirConfig{
 		Dir:      dir,
@@ -64,7 +72,7 @@ func TestDirInputFilterExclude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -82,13 +90,15 @@ func TestDirInputLogRotation(t *testing.T) {
 	logFile := filepath.Join(dir, "app.log")
 
 	// Write initial content.
-	os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644)
+	if err := os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	in, err := NewDirInput(DirConfig{Dir: dir, ReadFrom: "oldest"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -104,8 +114,12 @@ func TestDirInputLogRotation(t *testing.T) {
 	}
 
 	// Simulate log rotation: rename app.log → app.log.1, create new app.log.
-	os.Rename(logFile, filepath.Join(dir, "app.log.1"))
-	os.WriteFile(logFile, []byte("line3\n"), 0o644)
+	if err := os.Rename(logFile, filepath.Join(dir, "app.log.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logFile, []byte("line3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Should eventually read line3 from the new app.log.
 	for len(records) < 3 {
@@ -126,7 +140,9 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 	logFile := filepath.Join(dir, "app.log")
 	metaPath := filepath.Join(metaDir, "state.json")
 
-	os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644)
+	if err := os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// First session: read all lines.
 	in1, _ := NewDirInput(DirConfig{
@@ -141,13 +157,13 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 		b, _ := in1.ReadBatch(ctx1, 10)
 		r1 = append(r1, b...)
 	}
-	in1.Close()
+	_ = in1.Close()
 	cancel1()
 
 	// Append new line.
 	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
-	f.WriteString("line3\n")
-	f.Close()
+	_, _ = f.WriteString("line3\n")
+	_ = f.Close()
 
 	// Second session: should resume from saved offset.
 	in2, _ := NewDirInput(DirConfig{
@@ -156,7 +172,7 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 		MetaPath:          metaPath,
 		OffsetCommitEvery: 1,
 	})
-	defer in2.Close()
+	defer func() { _ = in2.Close() }()
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel2()
@@ -187,7 +203,7 @@ func TestDirInputLagInitial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	if got := in.(*dirInput).Lag(); got < 0 {
 		t.Fatalf("expected non-negative lag, got %d", got)
@@ -206,7 +222,7 @@ func TestDirInputCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	di := in.(*dirInput)
-	defer di.Close()
+	defer func() { _ = di.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -369,7 +385,7 @@ func TestDirInputOpenFileNewestStartsAtEnd(t *testing.T) {
 	if err := di.openFile(); err != nil {
 		t.Fatal(err)
 	}
-	defer di.currentF.Close()
+	defer func() { _ = di.currentF.Close() }()
 
 	if di.currentFile != path {
 		t.Fatalf("expected current file %q, got %q", path, di.currentFile)
@@ -407,7 +423,7 @@ func TestDirInputOpenFileSeeksSavedOffset(t *testing.T) {
 	if err := di.openFile(); err != nil {
 		t.Fatal(err)
 	}
-	defer di.currentF.Close()
+	defer func() { _ = di.currentF.Close() }()
 
 	line, n, err := di.readLine()
 	if err != nil {
@@ -507,7 +523,7 @@ func TestDirInputUpdateLagTracksRemainingBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	di := &dirInput{currentF: f, offset: int64(len("line1\n"))}
 	di.updateLag()

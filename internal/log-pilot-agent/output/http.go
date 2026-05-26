@@ -83,7 +83,7 @@ func (o *httpOutput) WriteBatch(ctx context.Context, records []input.Record) err
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("http output: status %d from %s", resp.StatusCode, o.cfg.URL)

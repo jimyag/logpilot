@@ -55,7 +55,7 @@ func extractString(config map[string]apiextensionsv1.JSON, key string) (string, 
 	return s, nil
 }
 
-func extractStringMap(config map[string]apiextensionsv1.JSON, key string) (map[string]string, error) {
+func extractStringMap(config map[string]apiextensionsv1.JSON, key string) (map[string]string, error) { //nolint:unparam
 	v, ok := config[key]
 	if !ok {
 		return nil, fmt.Errorf("missing config key %q", key)
@@ -67,7 +67,7 @@ func extractStringMap(config map[string]apiextensionsv1.JSON, key string) (map[s
 	return m, nil
 }
 
-func extractBool(config map[string]apiextensionsv1.JSON, key string) (bool, error) {
+func extractBool(config map[string]apiextensionsv1.JSON, key string) (bool, error) { //nolint:unparam
 	v, ok := config[key]
 	if !ok {
 		return false, fmt.Errorf("missing config key %q", key)

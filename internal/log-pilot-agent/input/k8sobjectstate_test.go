@@ -17,7 +17,7 @@ import (
 )
 
 func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
-	client := fake.NewSimpleClientset(
+	client := fake.NewSimpleClientset( //nolint:staticcheck
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "default"},
 			Spec:       corev1.PodSpec{NodeName: "node-1"},
@@ -46,7 +46,7 @@ func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 		Namespaces: []string{"default"},
 		Resources:  []string{"pod", "node"},
 	}, client)
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -66,7 +66,7 @@ func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 }
 
 func TestK8sObjectStateInputSnapshotsWorkloads(t *testing.T) {
-	client := fake.NewSimpleClientset(
+	client := fake.NewSimpleClientset( //nolint:staticcheck
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "deploy", Namespace: "default"},
 			Status:     appsv1.DeploymentStatus{Replicas: 2, ReadyReplicas: 1, UnavailableReplicas: 1},
@@ -88,7 +88,7 @@ func TestK8sObjectStateInputSnapshotsWorkloads(t *testing.T) {
 		Namespaces: []string{"default"},
 		Resources:  []string{"deployment", "statefulset", "daemonset", "job"},
 	}, client)
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -148,7 +148,7 @@ func TestHandleObjectJob(t *testing.T) {
 }
 
 func TestHandleObjectUnknown(t *testing.T) {
-	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)}
+	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)} //nolint:staticcheck
 	in.handleObject(context.Background(), watch.Event{Type: watch.Added, Object: &metav1.Status{Status: metav1.StatusSuccess}})
 
 	select {
@@ -320,7 +320,7 @@ func TestK8sObjectStateReadBatchCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	for i := 0; i < 256; i++ {
+	for range 256 {
 		batch, err := in.ReadBatch(ctx, 1)
 		if err != nil {
 			t.Fatal(err)
@@ -357,7 +357,7 @@ func TestContainerState(t *testing.T) {
 func assertHandleObjectEnqueues(t *testing.T, obj runtime.Object, wantKind string) {
 	t.Helper()
 
-	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)}
+	in := &k8sObjectStateInput{client: fake.NewSimpleClientset(), queue: make(chan Record, 1)} //nolint:staticcheck
 	in.handleObject(context.Background(), watch.Event{Type: watch.Added, Object: obj})
 
 	select {

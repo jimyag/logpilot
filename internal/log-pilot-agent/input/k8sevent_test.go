@@ -18,7 +18,7 @@ import (
 )
 
 func TestK8sEventInputListsAndCommitsResourceVersion(t *testing.T) {
-	client := fake.NewSimpleClientset(&corev1.Event{
+	client := fake.NewSimpleClientset(&corev1.Event{ //nolint:staticcheck
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "started",
 			Namespace:       "default",
@@ -31,7 +31,7 @@ func TestK8sEventInputListsAndCommitsResourceVersion(t *testing.T) {
 		Namespaces:          []string{"default"},
 		ResourceVersionPath: metaPath,
 	}, client)
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -55,9 +55,9 @@ func TestK8sEventInputListsAndCommitsResourceVersion(t *testing.T) {
 }
 
 func TestK8sEventInputWatchesNewEvents(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := NewK8sEventInput(K8sEventConfig{Namespaces: []string{"default"}}, client)
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	_, err := client.CoreV1().Events("default").Create(context.Background(), &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
@@ -165,7 +165,7 @@ func TestConsumeWatchErrorEvent(t *testing.T) {
 }
 
 func TestK8sEventRunNamespaceStopsOnCancel(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record, 1), cancel: func() {}}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -193,7 +193,7 @@ func TestK8sEventRunNamespaceStopsOnCancel(t *testing.T) {
 }
 
 func TestK8sEventRunNamespaceRetriesAfterListError(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record, 1), cancel: func() {}}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,7 +232,7 @@ func TestK8sEventRunNamespaceRetriesAfterListError(t *testing.T) {
 }
 
 func TestK8sEventListNamespaceResumeSkipsEnqueue(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record, 1), cancel: func() {}}
 	in.setLastResourceVersion("123")
 
@@ -257,7 +257,7 @@ func TestK8sEventListNamespaceResumeSkipsEnqueue(t *testing.T) {
 }
 
 func TestK8sEventListNamespaceResourceExpiredFallsBack(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record, 2), cancel: func() {}}
 	in.setLastResourceVersion("123")
 
@@ -366,7 +366,7 @@ func TestK8sEventReadBatchCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	for i := 0; i < 256; i++ {
+	for range 256 {
 		batch, err := in.ReadBatch(ctx, 1)
 		if err != nil {
 			t.Fatalf("ReadBatch() error = %v", err)
@@ -430,7 +430,7 @@ func TestK8sEventCommitRenameError(t *testing.T) {
 }
 
 func TestK8sEventListNamespaceReturnsError(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record, 1), cancel: func() {}}
 
 	client.PrependReactor("list", "events", func(action clientgotesting.Action) (bool, runtime.Object, error) {
@@ -443,7 +443,7 @@ func TestK8sEventListNamespaceReturnsError(t *testing.T) {
 }
 
 func TestK8sEventListNamespaceReturnsEnqueueError(t *testing.T) {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset() //nolint:staticcheck
 	in := &k8sEventInput{client: client, queue: make(chan Record), cancel: func() {}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -1,0 +1,1504 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>input: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/jimyag/logpilot/internal/log-pilot-agent/input/dir.go (93.0%)</option>
+				
+				<option value="file1">github.com/jimyag/logpilot/internal/log-pilot-agent/input/file.go (86.5%)</option>
+				
+				<option value="file2">github.com/jimyag/logpilot/internal/log-pilot-agent/input/k8sevent.go (76.3%)</option>
+				
+				<option value="file3">github.com/jimyag/logpilot/internal/log-pilot-agent/input/k8sobjectstate.go (90.1%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package input
+
+import (
+        "bufio"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "os"
+        "path/filepath"
+        "sort"
+        "sync/atomic"
+        "syscall"
+        "time"
+)
+
+// DirConfig configures a directory-scanning Input.
+type DirConfig struct {
+        // Dir is the directory to watch for log files.
+        Dir string `yaml:"dir"`
+        // MetaPath is where per-file offsets are persisted (JSON).
+        MetaPath string `yaml:"metaPath"`
+        // ReadFrom controls where to start on first open: "newest" or "oldest".
+        ReadFrom string `yaml:"readFrom"`
+        // Include is a list of regex patterns; only matching filenames are read.
+        Include []string `yaml:"include"`
+        // Exclude is a list of regex patterns; matching filenames are skipped.
+        Exclude []string `yaml:"exclude"`
+        // OffsetCommitEvery persists state every N records (default 20000).
+        OffsetCommitEvery int `yaml:"offsetCommitEvery"`
+}
+
+type dirOffsetState struct {
+        CurrentFile string           `json:"currentFile"`
+        Offset      int64            `json:"offset"`
+        DoneInodes  map[string]int64 `json:"doneInodes"` // inode (uint64 as string) -&gt; last offset
+}
+
+type dirInput struct {
+        cfg          DirConfig
+        currentF     *os.File
+        currentFile  string
+        currentInode uint64
+        offset       int64
+        reader       *bufio.Reader // bufio.Reader re-tries on EOF; Scanner does not
+        doneInodes   map[string]int64
+        includeRe    []interface{ MatchString(string) bool }
+        excludeRe    []interface{ MatchString(string) bool }
+        stopped      int32 // atomic
+        lag          int64 // atomic
+        readCount    int
+}
+
+// NewDirInput creates an Input that reads log files from a directory in
+// modification-time order, handling log rotation via inode tracking.
+//
+// Key design decisions (matching EMReader from logexporter):
+//   - Uses bufio.Reader not bufio.Scanner: Reader.ReadString returns "" on EOF
+//     but allows retrying when the file grows, Scanner permanently fails after EOF.
+//   - Offset tracks actual bytes consumed (not estimated from line length).
+//   - detectRotation clears currentFile so advanceFile picks up same-named new file.
+//   - inodeKey uses os.Stat to avoid extra file descriptors.
+func NewDirInput(cfg DirConfig) (Input, error) <span class="cov8" title="1">{
+        if cfg.OffsetCommitEvery == 0 </span><span class="cov8" title="1">{
+                cfg.OffsetCommitEvery = 20000
+        }</span>
+        <span class="cov8" title="1">d := &amp;dirInput{
+                cfg:        cfg,
+                doneInodes: make(map[string]int64),
+                includeRe:  compilePatternInterfaces(cfg.Include),
+                excludeRe:  compilePatternInterfaces(cfg.Exclude),
+        }
+        d.loadState()
+        return d, nil</span>
+}
+
+func (d *dirInput) ReadBatch(ctx context.Context, size int) ([]Record, error) <span class="cov8" title="1">{
+        if atomic.LoadInt32(&amp;d.stopped) &gt; 0 </span><span class="cov8" title="1">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">var records []Record
+        // Use a 100ms window: collect what's available, then return.
+        // Callers should sleep on empty batch (runner adds 200ms backoff).
+        deadline := time.Now().Add(100 * time.Millisecond)
+
+        for len(records) &lt; size </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return records, nil</span>
+                default:<span class="cov8" title="1"></span>
+                }
+                <span class="cov8" title="1">if time.Now().After(deadline) </span><span class="cov0" title="0">{
+                        break</span>
+                }
+
+                <span class="cov8" title="1">line, n, err := d.readLine()
+                if n &gt; 0 </span><span class="cov8" title="1">{
+                        d.offset += int64(n)
+                        d.updateLag()
+                }</span>
+                <span class="cov8" title="1">if line != "" </span><span class="cov8" title="1">{
+                        records = append(records, Record{Data: []byte(line)})
+                        d.readCount++
+                }</span>
+                <span class="cov8" title="1">if err == io.EOF </span><span class="cov8" title="1">{
+                        // No new data: try to advance to next file.
+                        if advanced := d.advanceFile(); !advanced </span><span class="cov8" title="1">{
+                                break</span> // nothing to do; caller will back off
+                        }
+                } else<span class="cov8" title="1"> if err != nil </span><span class="cov0" title="0">{
+                        break</span>
+                }
+        }
+        <span class="cov8" title="1">return records, nil</span>
+}
+
+func (d *dirInput) Lag() int64 <span class="cov8" title="1">{ return atomic.LoadInt64(&amp;d.lag) }</span>
+
+func (d *dirInput) Commit() error <span class="cov8" title="1">{
+        d.commitState()
+        return nil
+}</span>
+
+func (d *dirInput) Close() error <span class="cov8" title="1">{
+        atomic.StoreInt32(&amp;d.stopped, 1)
+        d.commitState()
+        if d.currentF != nil </span><span class="cov8" title="1">{
+                err := d.currentF.Close()
+                d.currentF = nil
+                d.reader = nil
+                return err
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// readLine reads one line from the current file using bufio.Reader.
+// Returns (line, bytesConsumed, error).
+// On EOF: returns ("", 0, io.EOF) — caller should retry after new data arrives
+// or advance to the next file.
+func (d *dirInput) readLine() (string, int, error) <span class="cov8" title="1">{
+        if d.currentF == nil </span><span class="cov8" title="1">{
+                if err := d.openFile(); err != nil </span><span class="cov0" title="0">{
+                        return "", 0, io.EOF
+                }</span>
+        }
+
+        // Check rotation before reading: inode change means the file was swapped.
+        <span class="cov8" title="1">if d.detectRotation() </span><span class="cov8" title="1">{
+                d.markCurrentDone()
+                d.currentF.Close()
+                d.currentF = nil
+                d.reader = nil
+                d.currentFile = "" // must clear so advanceFile picks up new same-name file
+                d.offset = 0
+                return "", 0, io.EOF
+        }</span>
+
+        // bufio.Reader.ReadString returns partial data + io.EOF on truncated last line,
+        // or full line + nil when delimiter found. Unlike Scanner, it doesn't die on EOF.
+        <span class="cov8" title="1">raw, err := d.reader.ReadString('\n')
+        n := len(raw)
+
+        if n &gt; 0 </span><span class="cov8" title="1">{
+                // Strip trailing newline characters (\r\n or \n).
+                line := raw
+                for len(line) &gt; 0 &amp;&amp; (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') </span><span class="cov8" title="1">{
+                        line = line[:len(line)-1]
+                }</span>
+                <span class="cov8" title="1">if err == nil || err == io.EOF </span><span class="cov8" title="1">{
+                        // Return the line even if err==io.EOF (last line without trailing newline).
+                        return line, n, nil
+                }</span>
+                <span class="cov0" title="0">return line, n, err</span>
+        }
+        // n == 0: no data available
+        <span class="cov8" title="1">return "", 0, err</span>
+}
+
+// openFile opens the file at d.currentFile (or the appropriate starting file
+// if currentFile is empty), seeking to the saved offset.
+func (d *dirInput) openFile() error <span class="cov8" title="1">{
+        var target string
+        var targetOffset int64
+
+        if d.currentFile != "" </span><span class="cov8" title="1">{
+                target = d.currentFile
+                targetOffset = d.offset
+        }</span> else<span class="cov8" title="1"> {
+                files := d.listFiles()
+                if len(files) == 0 </span><span class="cov8" title="1">{
+                        return fmt.Errorf("no files in dir %s", d.cfg.Dir)
+                }</span>
+                <span class="cov8" title="1">if d.cfg.ReadFrom == "newest" </span><span class="cov8" title="1">{
+                        target = files[len(files)-1]
+                        targetOffset = -1 // seek to end
+                }</span> else<span class="cov8" title="1"> {
+                        target = files[0]
+                        targetOffset = 0
+                }</span>
+        }
+
+        <span class="cov8" title="1">f, err := os.Open(target)
+        if err != nil </span><span class="cov8" title="1">{
+                // File may have been rotated away; clear so next call finds a fresh file.
+                d.currentFile = ""
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if targetOffset &lt; 0 </span><span class="cov8" title="1">{
+                off, err := f.Seek(0, io.SeekEnd)
+                if err != nil </span><span class="cov0" title="0">{
+                        f.Close()
+                        return err
+                }</span>
+                <span class="cov8" title="1">targetOffset = off</span>
+        } else<span class="cov8" title="1"> if targetOffset &gt; 0 </span><span class="cov8" title="1">{
+                if _, err := f.Seek(targetOffset, io.SeekStart); err != nil </span><span class="cov0" title="0">{
+                        // File may have been truncated; start from beginning.
+                        f.Seek(0, io.SeekStart)
+                        targetOffset = 0
+                }</span>
+        }
+
+        <span class="cov8" title="1">d.currentF = f
+        d.currentFile = target
+        d.offset = targetOffset
+        d.currentInode = getInodeFromFile(f)
+        d.reader = bufio.NewReaderSize(f, 1024*1024) // 1 MB buffer: handles long lines
+        d.updateLag()
+        return nil</span>
+}
+
+// advanceFile looks for the next unread file in the directory.
+// Returns true if a new file was opened.
+func (d *dirInput) advanceFile() bool <span class="cov8" title="1">{
+        files := d.listFiles()
+        if len(files) == 0 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Mark the current file as done before trying to open the next one.
+        // currentFile may be empty if detectRotation cleared it.
+        <span class="cov8" title="1">currentBase := ""
+        if d.currentFile != "" </span><span class="cov8" title="1">{
+                currentBase = filepath.Base(d.currentFile)
+        }</span>
+
+        <span class="cov8" title="1">for _, path := range files </span><span class="cov8" title="1">{
+                base := filepath.Base(path)
+                inode, err := inodeFromPath(path)
+                if err != nil </span><span class="cov0" title="0">{
+                        continue</span> // file disappeared
+                }
+                <span class="cov8" title="1">key := fmt.Sprintf("%d", inode)
+                // Skip files already fully read (keyed by inode, so rename doesn't fool us).
+                if _, done := d.doneInodes[key]; done </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                // Skip the exact file we're currently reading.
+                // After rotation currentFile is "", so this only fires for the un-rotated case.
+                <span class="cov8" title="1">if base == currentBase &amp;&amp; d.currentFile == path </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+
+                // Found a new file: mark current as done, open the new one.
+                <span class="cov8" title="1">if d.currentF != nil </span><span class="cov8" title="1">{
+                        d.markCurrentDone()
+                        d.currentF.Close()
+                        d.currentF = nil
+                        d.reader = nil
+                }</span>
+                <span class="cov8" title="1">d.currentFile = path
+                d.offset = 0
+                if err := d.openFile(); err == nil </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+        }
+        <span class="cov8" title="1">return false</span>
+}
+
+// detectRotation returns true if the current file has been rotated away
+// (inode changed or file shrank). Called once per readLine, but protected
+// by the 100ms deadline in ReadBatch, so effectively at most ~N times/100ms.
+func (d *dirInput) detectRotation() bool <span class="cov8" title="1">{
+        if d.currentF == nil || d.currentFile == "" </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">fi, err := os.Stat(d.currentFile)
+        if err != nil </span><span class="cov8" title="1">{
+                return true // file gone
+        }</span>
+        <span class="cov8" title="1">newInode := getInodeFromStat(fi)
+        if newInode != 0 &amp;&amp; d.currentInode != 0 &amp;&amp; newInode != d.currentInode </span><span class="cov8" title="1">{
+                return true // inode changed: file was replaced
+        }</span>
+        <span class="cov8" title="1">if fi.Size() &lt; d.offset </span><span class="cov8" title="1">{
+                return true // file was truncated
+        }</span>
+        <span class="cov8" title="1">return false</span>
+}
+
+func (d *dirInput) markCurrentDone() <span class="cov8" title="1">{
+        // Key on inode (not path): after rotation the file may be renamed,
+        // but the inode stays the same — so we correctly skip it.
+        if d.currentInode != 0 </span><span class="cov8" title="1">{
+                key := fmt.Sprintf("%d", d.currentInode)
+                d.doneInodes[key] = d.offset
+        }</span>
+}
+
+// inodeFromPath returns the inode number for a file path using os.Stat.
+// Returns an error if the file can't be stat-ed (e.g. deleted during rotation).
+func inodeFromPath(path string) (uint64, error) <span class="cov8" title="1">{
+        fi, err := os.Stat(path)
+        if err != nil </span><span class="cov8" title="1">{
+                return 0, err
+        }</span>
+        <span class="cov8" title="1">return getInodeFromStat(fi), nil</span>
+}
+
+// listFiles returns files in d.Dir matching include/exclude filters,
+// sorted by modification time (oldest first).
+func (d *dirInput) listFiles() []string <span class="cov8" title="1">{
+        entries, err := os.ReadDir(d.cfg.Dir)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">type fe struct {
+                path    string
+                modTime time.Time
+        }
+        var files []fe
+
+        for _, e := range entries </span><span class="cov8" title="1">{
+                if e.IsDir() </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">name := e.Name()
+                if !d.passesFilter(name) </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">info, err := e.Info()
+                if err != nil </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">files = append(files, fe{
+                        path:    filepath.Join(d.cfg.Dir, name),
+                        modTime: info.ModTime(),
+                })</span>
+        }
+
+        <span class="cov8" title="1">sort.Slice(files, func(i, j int) bool </span><span class="cov8" title="1">{
+                return files[i].modTime.Before(files[j].modTime)
+        }</span>)
+
+        <span class="cov8" title="1">paths := make([]string, len(files))
+        for i, f := range files </span><span class="cov8" title="1">{
+                paths[i] = f.path
+        }</span>
+        <span class="cov8" title="1">return paths</span>
+}
+
+func (d *dirInput) passesFilter(name string) bool <span class="cov8" title="1">{
+        if len(d.includeRe) &gt; 0 </span><span class="cov8" title="1">{
+                matched := false
+                for _, re := range d.includeRe </span><span class="cov8" title="1">{
+                        if re.MatchString(name) </span><span class="cov8" title="1">{
+                                matched = true
+                                break</span>
+                        }
+                }
+                <span class="cov8" title="1">if !matched </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">for _, re := range d.excludeRe </span><span class="cov8" title="1">{
+                if re.MatchString(name) </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">return true</span>
+}
+
+func (d *dirInput) updateLag() <span class="cov8" title="1">{
+        if d.currentF == nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">info, err := d.currentF.Stat()
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">remaining := max(info.Size()-d.offset, 0)
+        atomic.StoreInt64(&amp;d.lag, remaining)</span>
+}
+
+// commitState atomically writes current read state to MetaPath.
+func (d *dirInput) commitState() <span class="cov8" title="1">{
+        d.updateLag()
+        d.pruneStaleInodes()
+        if d.cfg.MetaPath == "" </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">if err := os.MkdirAll(filepath.Dir(d.cfg.MetaPath), 0755); err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">state := dirOffsetState{
+                CurrentFile: d.currentFile,
+                Offset:      d.offset,
+                DoneInodes:  d.doneInodes,
+        }
+        raw, err := json.Marshal(state)
+        if err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">tmp := d.cfg.MetaPath + ".tmp"
+        if err := os.WriteFile(tmp, raw, 0644); err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">_ = os.Rename(tmp, d.cfg.MetaPath)</span> // atomic on POSIX
+}
+
+func (d *dirInput) loadState() <span class="cov8" title="1">{
+        if d.cfg.MetaPath == "" </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">raw, err := os.ReadFile(d.cfg.MetaPath)
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">var state dirOffsetState
+        if err := json.Unmarshal(raw, &amp;state); err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">d.currentFile = state.CurrentFile
+        d.offset = state.Offset
+        if state.DoneInodes != nil </span><span class="cov8" title="1">{
+                d.doneInodes = state.DoneInodes
+        }</span>
+}
+
+// pruneStaleInodes removes entries from doneInodes that no longer correspond
+// to any file currently in the directory. This prevents unbounded memory and
+// state-file growth when logs are frequently rotated.
+func (d *dirInput) pruneStaleInodes() <span class="cov8" title="1">{
+        if len(d.doneInodes) == 0 </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">entries, err := os.ReadDir(d.cfg.Dir)
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">currentInodes := make(map[string]bool, len(entries))
+        for _, e := range entries </span><span class="cov8" title="1">{
+                if e.IsDir() </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">path := filepath.Join(d.cfg.Dir, e.Name())
+                if inode, err := inodeFromPath(path); err == nil </span><span class="cov8" title="1">{
+                        currentInodes[fmt.Sprintf("%d", inode)] = true
+                }</span>
+        }
+        <span class="cov8" title="1">for key := range d.doneInodes </span><span class="cov8" title="1">{
+                if !currentInodes[key] </span><span class="cov8" title="1">{
+                        delete(d.doneInodes, key)
+                }</span>
+        }
+}
+
+// getInodeFromFile returns the inode number of an open file.
+func getInodeFromFile(f *os.File) uint64 <span class="cov8" title="1">{
+        var stat syscall.Stat_t
+        if err := syscall.Fstat(int(f.Fd()), &amp;stat); err != nil </span><span class="cov8" title="1">{
+                return 0
+        }</span>
+        <span class="cov8" title="1">return stat.Ino</span>
+}
+
+// getInodeFromStat returns the inode number from an os.FileInfo.
+func getInodeFromStat(fi os.FileInfo) uint64 <span class="cov8" title="1">{
+        if sys, ok := fi.Sys().(*syscall.Stat_t); ok </span><span class="cov8" title="1">{
+                return sys.Ino
+        }</span>
+        <span class="cov8" title="1">return 0</span>
+}
+
+// compilePatternInterfaces wraps compilePatterns result for use with the passesFilter method.
+func compilePatternInterfaces(patterns []string) []interface{ MatchString(string) bool } <span class="cov8" title="1">{
+        res := compilePatterns(patterns)
+        out := make([]interface{ MatchString(string) bool }, len(res))
+        for i, re := range res </span><span class="cov8" title="1">{
+                out[i] = re
+        }</span>
+        <span class="cov8" title="1">return out</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package input
+
+import (
+        "context"
+        "encoding/json"
+        "os"
+        "path/filepath"
+        "regexp"
+        "sync/atomic"
+
+        "github.com/nxadm/tail"
+)
+
+type offsetState struct {
+        Offset int64 `json:"offset"`
+}
+
+// loadOffset reads a persisted byte offset from metaPath.
+// Returns -1 if the file doesn't exist or can't be parsed.
+func loadOffset(metaPath string) int64 <span class="cov8" title="1">{
+        if metaPath == "" </span><span class="cov8" title="1">{
+                return -1
+        }</span>
+        <span class="cov8" title="1">raw, err := os.ReadFile(metaPath)
+        if err != nil </span><span class="cov8" title="1">{
+                return -1
+        }</span>
+        <span class="cov8" title="1">var state offsetState
+        if err := json.Unmarshal(raw, &amp;state); err != nil </span><span class="cov8" title="1">{
+                return -1
+        }</span>
+        <span class="cov8" title="1">return state.Offset</span>
+}
+
+// FileConfig configures a file-tailing Input.
+type FileConfig struct {
+        // Path is the absolute path to the log file.
+        Path string `yaml:"path"`
+        // MetaPath is the directory for persisting read offsets.
+        MetaPath string `yaml:"metaPath"`
+        // ReadFrom controls the starting position: "newest" (default) or "oldest".
+        ReadFrom string `yaml:"readFrom"`
+        // Include is a list of regex patterns; only matching filenames are tailed.
+        // Empty means all files pass.
+        Include []string `yaml:"include"`
+        // Exclude is a list of regex patterns; matching filenames are skipped.
+        Exclude []string `yaml:"exclude"`
+        // OffsetCommitEvery persists the read offset every N records.
+        OffsetCommitEvery int `yaml:"offsetCommitEvery"`
+}
+
+type fileInput struct {
+        cfg       FileConfig
+        tail      *tail.Tail
+        stopped   int32 // atomic
+        lag       int64 // atomic, approximate bytes remaining
+        readCount int
+        includeRe []*regexp.Regexp
+        excludeRe []*regexp.Regexp
+}
+
+// NewFileInput creates a file-tailing Input.
+// metaDir is the directory where offset state will be persisted.
+func NewFileInput(cfg FileConfig, metaDir string) (Input, error) <span class="cov8" title="1">{
+        if cfg.OffsetCommitEvery == 0 </span><span class="cov8" title="1">{
+                cfg.OffsetCommitEvery = 20000
+        }</span>
+        <span class="cov8" title="1">if cfg.MetaPath == "" &amp;&amp; metaDir != "" </span><span class="cov8" title="1">{
+                cfg.MetaPath = filepath.Join(metaDir, filepath.Base(cfg.Path)+".offset")
+        }</span>
+
+        <span class="cov8" title="1">seekInfo := &amp;tail.SeekInfo{Offset: 0, Whence: 2} // newest by default
+        if cfg.ReadFrom == "oldest" </span><span class="cov8" title="1">{
+                seekInfo = &amp;tail.SeekInfo{Offset: 0, Whence: 0}
+        }</span>
+        // Restore saved offset if available — overrides readFrom.
+        <span class="cov8" title="1">savedOffset := loadOffset(cfg.MetaPath)
+        if savedOffset &gt;= 0 </span><span class="cov8" title="1">{
+                seekInfo = &amp;tail.SeekInfo{Offset: savedOffset, Whence: 0}
+        }</span>
+
+        <span class="cov8" title="1">t, err := tail.TailFile(cfg.Path, tail.Config{
+                Follow:    true,
+                ReOpen:    true, // follow across log rotation
+                MustExist: false,
+                Location:  seekInfo,
+                Logger:    tail.DiscardingLogger,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">fi := &amp;fileInput{
+                cfg:       cfg,
+                tail:      t,
+                includeRe: compilePatterns(cfg.Include),
+                excludeRe: compilePatterns(cfg.Exclude),
+        }
+
+        if info, err := os.Stat(cfg.Path); err == nil </span><span class="cov8" title="1">{
+                // Compute initial lag as bytes remaining from the starting position.
+                var startOffset int64
+                switch </span>{
+                case savedOffset &gt;= 0:<span class="cov8" title="1">
+                        startOffset = savedOffset</span>
+                case cfg.ReadFrom == "newest":<span class="cov0" title="0">
+                        startOffset = info.Size()</span> // starting from end: lag == 0
+                default:<span class="cov8" title="1"> // oldest
+                        startOffset = 0</span>
+                }
+                <span class="cov8" title="1">lag := max(info.Size()-startOffset, 0)
+                atomic.StoreInt64(&amp;fi.lag, lag)</span>
+        }
+
+        <span class="cov8" title="1">return fi, nil</span>
+}
+
+func (f *fileInput) ReadBatch(ctx context.Context, size int) ([]Record, error) <span class="cov8" title="1">{
+        if atomic.LoadInt32(&amp;f.stopped) &gt; 0 </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">var records []Record
+        for len(records) &lt; size </span><span class="cov8" title="1">{
+                select </span>{
+                case line, ok := &lt;-f.tail.Lines:<span class="cov8" title="1">
+                        if !ok </span><span class="cov0" title="0">{
+                                return records, nil
+                        }</span>
+                        <span class="cov8" title="1">if line.Err != nil </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">if !f.passesFilter(filepath.Base(f.cfg.Path)) </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">records = append(records, Record{Data: []byte(line.Text)})
+                        f.readCount++</span>
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return records, nil</span>
+                default:<span class="cov8" title="1">
+                        if len(records) &gt; 0 </span><span class="cov8" title="1">{
+                                return records, nil
+                        }</span>
+                        // No records buffered yet; block until one arrives or context expires.
+                        <span class="cov8" title="1">select </span>{
+                        case line, ok := &lt;-f.tail.Lines:<span class="cov8" title="1">
+                                if !ok </span><span class="cov0" title="0">{
+                                        return records, nil
+                                }</span>
+                                <span class="cov8" title="1">if line.Err == nil &amp;&amp; f.passesFilter(filepath.Base(f.cfg.Path)) </span><span class="cov8" title="1">{
+                                        records = append(records, Record{Data: []byte(line.Text)})
+                                        f.readCount++
+                                }</span>
+                        case &lt;-ctx.Done():<span class="cov8" title="1">
+                                return records, nil</span>
+                        }
+                }
+        }
+        <span class="cov8" title="1">return records, nil</span>
+}
+
+func (f *fileInput) Lag() int64 <span class="cov8" title="1">{ return atomic.LoadInt64(&amp;f.lag) }</span>
+
+func (f *fileInput) Commit() error <span class="cov8" title="1">{
+        f.commitOffset()
+        return nil
+}</span>
+
+func (f *fileInput) Close() error <span class="cov8" title="1">{
+        atomic.StoreInt32(&amp;f.stopped, 1)
+        f.commitOffset()
+        return f.tail.Stop()
+}</span>
+
+func (f *fileInput) commitOffset() <span class="cov8" title="1">{
+        pos, err := f.tail.Tell()
+        if err != nil </span><span class="cov0" title="0">{
+                pos = 0
+        }</span>
+
+        // Update in-memory lag.
+        <span class="cov8" title="1">if info, err := os.Stat(f.cfg.Path); err == nil </span><span class="cov8" title="1">{
+                remaining := max(info.Size()-pos, 0)
+                atomic.StoreInt64(&amp;f.lag, remaining)
+        }</span>
+
+        // Atomically persist offset to MetaPath (write tmp then rename).
+        <span class="cov8" title="1">if f.cfg.MetaPath == "" </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">if err := os.MkdirAll(filepath.Dir(f.cfg.MetaPath), 0755); err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">raw, err := json.Marshal(offsetState{Offset: pos})
+        if err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">tmp := f.cfg.MetaPath + ".tmp"
+        if err := os.WriteFile(tmp, raw, 0644); err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">_ = os.Rename(tmp, f.cfg.MetaPath)</span>
+}
+
+func (f *fileInput) passesFilter(filename string) bool <span class="cov8" title="1">{
+        if len(f.includeRe) &gt; 0 </span><span class="cov8" title="1">{
+                matched := false
+                for _, re := range f.includeRe </span><span class="cov8" title="1">{
+                        if re.MatchString(filename) </span><span class="cov8" title="1">{
+                                matched = true
+                                break</span>
+                        }
+                }
+                <span class="cov8" title="1">if !matched </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">for _, re := range f.excludeRe </span><span class="cov8" title="1">{
+                if re.MatchString(filename) </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">return true</span>
+}
+
+func compilePatterns(patterns []string) []*regexp.Regexp <span class="cov8" title="1">{
+        var res []*regexp.Regexp
+        for _, p := range patterns </span><span class="cov8" title="1">{
+                if re, err := regexp.Compile(p); err == nil </span><span class="cov8" title="1">{
+                        res = append(res, re)
+                }</span>
+        }
+        <span class="cov8" title="1">return res</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package input
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "os"
+        "path/filepath"
+        "sync"
+        "sync/atomic"
+        "time"
+
+        corev1 "k8s.io/api/core/v1"
+        apierrors "k8s.io/apimachinery/pkg/api/errors"
+        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        "k8s.io/apimachinery/pkg/watch"
+        "k8s.io/client-go/kubernetes"
+)
+
+// K8sEventConfig configures the K8s event input.
+type K8sEventConfig struct {
+        // Namespaces to watch. Empty means all namespaces.
+        Namespaces []string `yaml:"namespaces"`
+        // ResourceVersionPath is where the last-seen ResourceVersion is persisted.
+        ResourceVersionPath string `yaml:"resourceVersionPath"`
+}
+
+type k8sEventInput struct {
+        cfg    K8sEventConfig
+        client kubernetes.Interface
+        queue  chan Record
+        lag    int64
+        cancel context.CancelFunc
+        mu     sync.Mutex
+
+        lastResourceVersion string
+        readResourceVersion string
+}
+
+// NewK8sEventInput creates an input that lists K8s Event objects and then
+// continuously watches for changes.
+func NewK8sEventInput(cfg K8sEventConfig, c kubernetes.Interface) Input <span class="cov8" title="1">{
+        in := &amp;k8sEventInput{
+                cfg:                 cfg,
+                client:              c,
+                queue:               make(chan Record, 1000),
+                lastResourceVersion: loadResourceVersion(cfg.ResourceVersionPath),
+        }
+        ctx, cancel := context.WithCancel(context.Background())
+        in.cancel = cancel
+        go in.run(ctx)
+        return in
+}</span>
+
+func (k *k8sEventInput) run(ctx context.Context) <span class="cov8" title="1">{
+        namespaces := k.cfg.Namespaces
+        if len(namespaces) == 0 </span><span class="cov0" title="0">{
+                namespaces = []string{""}
+        }</span>
+        // Launch exactly one goroutine per namespace. Each goroutine manages its
+        // own list+watch loop with internal backoff, so restarting on error never
+        // accumulates extra goroutines.
+        <span class="cov8" title="1">var wg sync.WaitGroup
+        for _, ns := range namespaces </span><span class="cov8" title="1">{
+                wg.Add(1)
+                go func(namespace string) </span><span class="cov8" title="1">{
+                        defer wg.Done()
+                        k.runNamespace(ctx, namespace)
+                }</span>(ns)
+        }
+        <span class="cov8" title="1">wg.Wait()</span>
+}
+
+// runNamespace continuously lists then watches events in one namespace.
+// It retries with a 1 s back-off on any error, and exits when ctx is done.
+func (k *k8sEventInput) runNamespace(ctx context.Context, namespace string) <span class="cov8" title="1">{
+        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                if err := k.listNamespace(ctx, namespace); err != nil </span><span class="cov0" title="0">{
+                        if ctx.Err() != nil </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">time.Sleep(time.Second)
+                        continue</span>
+                }
+                // Watch until the connection closes or ctx is cancelled, then retry.
+                <span class="cov8" title="1">k.watchNamespace(ctx, namespace)</span>
+        }
+}
+
+func (k *k8sEventInput) listNamespace(ctx context.Context, namespace string) error <span class="cov8" title="1">{
+        resourceVersion := k.getLastResourceVersion()
+        resume := resourceVersion != ""
+        list, err := k.client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+                ResourceVersion: resourceVersion,
+        })
+        if apierrors.IsResourceExpired(err) </span><span class="cov0" title="0">{
+                k.setLastResourceVersion("")
+                resume = false
+                list, err = k.client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+        }</span>
+        <span class="cov8" title="1">if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">k.setLastResourceVersion(list.ResourceVersion)
+        if resume </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">for i := range list.Items </span><span class="cov8" title="1">{
+                if err := k.enqueue(ctx, list.Items[i]); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (k *k8sEventInput) watchNamespace(ctx context.Context, namespace string) <span class="cov8" title="1">{
+        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                w, err := k.client.CoreV1().Events(namespace).Watch(ctx, metav1.ListOptions{
+                        ResourceVersion: k.getLastResourceVersion(),
+                })
+                if apierrors.IsResourceExpired(err) </span><span class="cov0" title="0">{
+                        k.setLastResourceVersion("")
+                        _ = k.listNamespace(ctx, namespace)
+                        continue</span>
+                }
+                <span class="cov8" title="1">if err != nil </span><span class="cov0" title="0">{
+                        time.Sleep(time.Second)
+                        continue</span>
+                }
+                <span class="cov8" title="1">k.consumeWatch(ctx, w)</span>
+        }
+}
+
+func (k *k8sEventInput) consumeWatch(ctx context.Context, w watch.Interface) <span class="cov8" title="1">{
+        defer w.Stop()
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case ev, ok := &lt;-w.ResultChan():<span class="cov8" title="1">
+                        if !ok </span><span class="cov8" title="1">{
+                                return
+                        }</span>
+                        <span class="cov8" title="1">if ev.Type == watch.Deleted </span><span class="cov8" title="1">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">eventObj, ok := ev.Object.(*corev1.Event)
+                        if !ok </span><span class="cov8" title="1">{
+                                continue</span>
+                        }
+                        <span class="cov0" title="0">k.setLastResourceVersion(eventObj.ResourceVersion)
+                        _ = k.enqueue(ctx, *eventObj)</span>
+                }
+        }
+}
+
+func (k *k8sEventInput) enqueue(ctx context.Context, ev corev1.Event) error <span class="cov8" title="1">{
+        raw, err := json.Marshal(ev)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">select </span>{
+        case k.queue &lt;- Record{
+                Data: raw,
+                Meta: map[string]string{"resourceVersion": ev.ResourceVersion},
+        }:<span class="cov8" title="1">
+                atomic.AddInt64(&amp;k.lag, 1)
+                return nil</span>
+        case &lt;-ctx.Done():<span class="cov0" title="0">
+                return ctx.Err()</span>
+        }
+}
+
+func (k *k8sEventInput) ReadBatch(ctx context.Context, size int) ([]Record, error) <span class="cov8" title="1">{
+        var records []Record
+        for len(records) &lt; size </span><span class="cov8" title="1">{
+                select </span>{
+                case r, ok := &lt;-k.queue:<span class="cov8" title="1">
+                        if !ok </span><span class="cov0" title="0">{
+                                return records, nil
+                        }</span>
+                        <span class="cov8" title="1">records = append(records, r)
+                        if r.Meta != nil &amp;&amp; r.Meta["resourceVersion"] != "" </span><span class="cov8" title="1">{
+                                k.setReadResourceVersion(r.Meta["resourceVersion"])
+                        }</span>
+                        <span class="cov8" title="1">atomic.AddInt64(&amp;k.lag, -1)</span>
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return records, nil</span>
+                default:<span class="cov8" title="1">
+                        return records, nil</span>
+                }
+        }
+        <span class="cov0" title="0">return records, nil</span>
+}
+
+func (k *k8sEventInput) Commit() error <span class="cov8" title="1">{
+        resourceVersion := k.getReadResourceVersion()
+        if resourceVersion == "" </span><span class="cov8" title="1">{
+                resourceVersion = k.getLastResourceVersion()
+        }</span>
+        <span class="cov8" title="1">if k.cfg.ResourceVersionPath == "" || resourceVersion == "" </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">if err := os.MkdirAll(filepath.Dir(k.cfg.ResourceVersionPath), 0755); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">tmp := k.cfg.ResourceVersionPath + ".tmp"
+        if err := os.WriteFile(tmp, []byte(resourceVersion), 0644); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := os.Rename(tmp, k.cfg.ResourceVersionPath); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("commit k8s event resourceVersion: %w", err)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (k *k8sEventInput) Lag() int64 <span class="cov8" title="1">{ return atomic.LoadInt64(&amp;k.lag) }</span>
+
+func (k *k8sEventInput) Close() error <span class="cov8" title="1">{
+        k.cancel()
+        return k.Commit()
+}</span>
+
+func loadResourceVersion(path string) string <span class="cov8" title="1">{
+        if path == "" </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">raw, err := os.ReadFile(path)
+        if err != nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov0" title="0">return string(raw)</span>
+}
+
+func (k *k8sEventInput) getLastResourceVersion() string <span class="cov8" title="1">{
+        k.mu.Lock()
+        defer k.mu.Unlock()
+        return k.lastResourceVersion
+}</span>
+
+func (k *k8sEventInput) setLastResourceVersion(resourceVersion string) <span class="cov8" title="1">{
+        k.mu.Lock()
+        defer k.mu.Unlock()
+        k.lastResourceVersion = resourceVersion
+}</span>
+
+func (k *k8sEventInput) getReadResourceVersion() string <span class="cov8" title="1">{
+        k.mu.Lock()
+        defer k.mu.Unlock()
+        return k.readResourceVersion
+}</span>
+
+func (k *k8sEventInput) setReadResourceVersion(resourceVersion string) <span class="cov8" title="1">{
+        k.mu.Lock()
+        defer k.mu.Unlock()
+        k.readResourceVersion = resourceVersion
+}</span>
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package input
+
+import (
+        "context"
+        "encoding/json"
+        "sync/atomic"
+        "time"
+
+        appsv1 "k8s.io/api/apps/v1"
+        batchv1 "k8s.io/api/batch/v1"
+        corev1 "k8s.io/api/core/v1"
+        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        "k8s.io/apimachinery/pkg/watch"
+        "k8s.io/client-go/kubernetes"
+)
+
+// K8sObjectStateConfig configures Kubernetes object state collection.
+type K8sObjectStateConfig struct {
+        // Namespaces to watch for namespaced resources. Empty means all namespaces.
+        Namespaces []string `yaml:"namespaces"`
+        // Resources to collect. Empty means pod,node,deployment,statefulset,daemonset,job.
+        Resources []string `yaml:"resources"`
+}
+
+type k8sObjectStateInput struct {
+        cfg    K8sObjectStateConfig
+        client kubernetes.Interface
+        queue  chan Record
+        lag    int64
+        cancel context.CancelFunc
+}
+
+// NewK8sObjectStateInput creates an input that snapshots Kubernetes object
+// state and then watches for changes.
+func NewK8sObjectStateInput(cfg K8sObjectStateConfig, c kubernetes.Interface) Input <span class="cov8" title="1">{
+        in := &amp;k8sObjectStateInput{
+                cfg:    cfg,
+                client: c,
+                queue:  make(chan Record, 1000),
+        }
+        ctx, cancel := context.WithCancel(context.Background())
+        in.cancel = cancel
+        go in.run(ctx)
+        return in
+}</span>
+
+func (k *k8sObjectStateInput) run(ctx context.Context) <span class="cov8" title="1">{
+        for _, resource := range k.resources() </span><span class="cov8" title="1">{
+                switch resource </span>{
+                case "pod", "pods":<span class="cov8" title="1">
+                        k.startPodCollectors(ctx)</span>
+                case "node", "nodes":<span class="cov8" title="1">
+                        go k.collectNodes(ctx)</span>
+                case "deployment", "deployments":<span class="cov8" title="1">
+                        k.startDeploymentCollectors(ctx)</span>
+                case "statefulset", "statefulsets":<span class="cov8" title="1">
+                        k.startStatefulSetCollectors(ctx)</span>
+                case "daemonset", "daemonsets":<span class="cov8" title="1">
+                        k.startDaemonSetCollectors(ctx)</span>
+                case "job", "jobs":<span class="cov8" title="1">
+                        k.startJobCollectors(ctx)</span>
+                }
+        }
+        <span class="cov8" title="1">&lt;-ctx.Done()</span>
+}
+
+func (k *k8sObjectStateInput) resources() []string <span class="cov8" title="1">{
+        if len(k.cfg.Resources) &gt; 0 </span><span class="cov8" title="1">{
+                return k.cfg.Resources
+        }</span>
+        <span class="cov0" title="0">return []string{"pod", "node", "deployment", "statefulset", "daemonset", "job"}</span>
+}
+
+func (k *k8sObjectStateInput) namespaces() []string <span class="cov8" title="1">{
+        if len(k.cfg.Namespaces) &gt; 0 </span><span class="cov8" title="1">{
+                return k.cfg.Namespaces
+        }</span>
+        <span class="cov0" title="0">return []string{metav1.NamespaceAll}</span>
+}
+
+func (k *k8sObjectStateInput) startPodCollectors(ctx context.Context) <span class="cov8" title="1">{
+        for _, namespace := range k.namespaces() </span><span class="cov8" title="1">{
+                ns := namespace
+                go func() </span><span class="cov8" title="1">{
+                        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                                list, err := k.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+                                if err == nil </span><span class="cov8" title="1">{
+                                        for i := range list.Items </span><span class="cov8" title="1">{
+                                                _ = k.enqueue(ctx, "Pod", "snapshot", podState(&amp;list.Items[i]))
+                                        }</span>
+                                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                                return k.client.CoreV1().Pods(ns).Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                                        }</span>, k.handleObject)
+                                }
+                                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+                        }
+                }()
+        }
+}
+
+func (k *k8sObjectStateInput) collectNodes(ctx context.Context) <span class="cov8" title="1">{
+        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                list, err := k.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+                if err == nil </span><span class="cov8" title="1">{
+                        for i := range list.Items </span><span class="cov8" title="1">{
+                                _ = k.enqueue(ctx, "Node", "snapshot", nodeState(&amp;list.Items[i]))
+                        }</span>
+                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                return k.client.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                        }</span>, k.handleObject)
+                }
+                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+        }
+}
+
+func (k *k8sObjectStateInput) startDeploymentCollectors(ctx context.Context) <span class="cov8" title="1">{
+        for _, namespace := range k.namespaces() </span><span class="cov8" title="1">{
+                ns := namespace
+                go func() </span><span class="cov8" title="1">{
+                        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                                list, err := k.client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+                                if err == nil </span><span class="cov8" title="1">{
+                                        for i := range list.Items </span><span class="cov8" title="1">{
+                                                _ = k.enqueue(ctx, "Deployment", "snapshot", deploymentState(&amp;list.Items[i]))
+                                        }</span>
+                                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                                return k.client.AppsV1().Deployments(ns).Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                                        }</span>, k.handleObject)
+                                }
+                                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+                        }
+                }()
+        }
+}
+
+func (k *k8sObjectStateInput) startStatefulSetCollectors(ctx context.Context) <span class="cov8" title="1">{
+        for _, namespace := range k.namespaces() </span><span class="cov8" title="1">{
+                ns := namespace
+                go func() </span><span class="cov8" title="1">{
+                        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                                list, err := k.client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+                                if err == nil </span><span class="cov8" title="1">{
+                                        for i := range list.Items </span><span class="cov8" title="1">{
+                                                _ = k.enqueue(ctx, "StatefulSet", "snapshot", statefulSetState(&amp;list.Items[i]))
+                                        }</span>
+                                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                                return k.client.AppsV1().StatefulSets(ns).Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                                        }</span>, k.handleObject)
+                                }
+                                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+                        }
+                }()
+        }
+}
+
+func (k *k8sObjectStateInput) startDaemonSetCollectors(ctx context.Context) <span class="cov8" title="1">{
+        for _, namespace := range k.namespaces() </span><span class="cov8" title="1">{
+                ns := namespace
+                go func() </span><span class="cov8" title="1">{
+                        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                                list, err := k.client.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
+                                if err == nil </span><span class="cov8" title="1">{
+                                        for i := range list.Items </span><span class="cov8" title="1">{
+                                                _ = k.enqueue(ctx, "DaemonSet", "snapshot", daemonSetState(&amp;list.Items[i]))
+                                        }</span>
+                                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                                return k.client.AppsV1().DaemonSets(ns).Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                                        }</span>, k.handleObject)
+                                }
+                                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+                        }
+                }()
+        }
+}
+
+func (k *k8sObjectStateInput) startJobCollectors(ctx context.Context) <span class="cov8" title="1">{
+        for _, namespace := range k.namespaces() </span><span class="cov8" title="1">{
+                ns := namespace
+                go func() </span><span class="cov8" title="1">{
+                        for ctx.Err() == nil </span><span class="cov8" title="1">{
+                                list, err := k.client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
+                                if err == nil </span><span class="cov8" title="1">{
+                                        for i := range list.Items </span><span class="cov8" title="1">{
+                                                _ = k.enqueue(ctx, "Job", "snapshot", jobState(&amp;list.Items[i]))
+                                        }</span>
+                                        <span class="cov8" title="1">k.watch(ctx, func() (watch.Interface, error) </span><span class="cov8" title="1">{
+                                                return k.client.BatchV1().Jobs(ns).Watch(ctx, metav1.ListOptions{ResourceVersion: list.ResourceVersion})
+                                        }</span>, k.handleObject)
+                                }
+                                <span class="cov8" title="1">time.Sleep(time.Second)</span>
+                        }
+                }()
+        }
+}
+
+func (k *k8sObjectStateInput) watch(ctx context.Context, watchFn func() (watch.Interface, error), handle func(context.Context, watch.Event)) <span class="cov8" title="1">{
+        w, err := watchFn()
+        if err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">defer w.Stop()
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case ev, ok := &lt;-w.ResultChan():<span class="cov0" title="0">
+                        if !ok </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">handle(ctx, ev)</span>
+                }
+        }
+}
+
+func (k *k8sObjectStateInput) handleObject(ctx context.Context, ev watch.Event) <span class="cov8" title="1">{
+        action := string(ev.Type)
+        switch obj := ev.Object.(type) </span>{
+        case *corev1.Pod:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "Pod", action, podState(obj))</span>
+        case *corev1.Node:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "Node", action, nodeState(obj))</span>
+        case *appsv1.Deployment:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "Deployment", action, deploymentState(obj))</span>
+        case *appsv1.StatefulSet:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "StatefulSet", action, statefulSetState(obj))</span>
+        case *appsv1.DaemonSet:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "DaemonSet", action, daemonSetState(obj))</span>
+        case *batchv1.Job:<span class="cov8" title="1">
+                _ = k.enqueue(ctx, "Job", action, jobState(obj))</span>
+        }
+}
+
+func (k *k8sObjectStateInput) enqueue(ctx context.Context, kind, action string, state map[string]any) error <span class="cov8" title="1">{
+        record := map[string]any{
+                "kind":      kind,
+                "action":    action,
+                "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+                "object":    state,
+        }
+        raw, err := json.Marshal(record)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">select </span>{
+        case k.queue &lt;- Record{Data: raw, Meta: map[string]string{"kind": kind, "action": action}}:<span class="cov8" title="1">
+                atomic.AddInt64(&amp;k.lag, 1)
+                return nil</span>
+        case &lt;-ctx.Done():<span class="cov0" title="0">
+                return ctx.Err()</span>
+        }
+}
+
+func (k *k8sObjectStateInput) ReadBatch(ctx context.Context, size int) ([]Record, error) <span class="cov8" title="1">{
+        var records []Record
+        for len(records) &lt; size </span><span class="cov8" title="1">{
+                select </span>{
+                case r, ok := &lt;-k.queue:<span class="cov8" title="1">
+                        if !ok </span><span class="cov0" title="0">{
+                                return records, nil
+                        }</span>
+                        <span class="cov8" title="1">records = append(records, r)
+                        atomic.AddInt64(&amp;k.lag, -1)</span>
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return records, nil</span>
+                default:<span class="cov8" title="1">
+                        return records, nil</span>
+                }
+        }
+        <span class="cov0" title="0">return records, nil</span>
+}
+
+func (k *k8sObjectStateInput) Commit() error <span class="cov8" title="1">{ return nil }</span>
+func (k *k8sObjectStateInput) Lag() int64    <span class="cov8" title="1">{ return atomic.LoadInt64(&amp;k.lag) }</span>
+func (k *k8sObjectStateInput) Close() error <span class="cov8" title="1">{
+        k.cancel()
+        return nil
+}</span>
+
+func metadataState(obj metav1.Object) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "name":            obj.GetName(),
+                "namespace":       obj.GetNamespace(),
+                "uid":             string(obj.GetUID()),
+                "resourceVersion": obj.GetResourceVersion(),
+                "labels":          obj.GetLabels(),
+                "annotations":     obj.GetAnnotations(),
+                "creationTime":    obj.GetCreationTimestamp().Time.UTC().Format(time.RFC3339Nano),
+        }
+}</span>
+
+func podState(pod *corev1.Pod) map[string]any <span class="cov8" title="1">{
+        containers := make([]map[string]any, 0, len(pod.Status.ContainerStatuses))
+        for _, status := range pod.Status.ContainerStatuses </span><span class="cov8" title="1">{
+                containers = append(containers, map[string]any{
+                        "name":         status.Name,
+                        "ready":        status.Ready,
+                        "restartCount": status.RestartCount,
+                        "state":        containerState(status.State),
+                        "lastState":    containerState(status.LastTerminationState),
+                })
+        }</span>
+        <span class="cov8" title="1">return map[string]any{
+                "metadata":          metadataState(pod),
+                "nodeName":          pod.Spec.NodeName,
+                "phase":             string(pod.Status.Phase),
+                "reason":            pod.Status.Reason,
+                "message":           pod.Status.Message,
+                "conditions":        pod.Status.Conditions,
+                "containerStatuses": containers,
+        }</span>
+}
+
+func containerState(state corev1.ContainerState) map[string]any <span class="cov8" title="1">{
+        switch </span>{
+        case state.Waiting != nil:<span class="cov0" title="0">
+                return map[string]any{"state": "waiting", "reason": state.Waiting.Reason, "message": state.Waiting.Message}</span>
+        case state.Running != nil:<span class="cov0" title="0">
+                return map[string]any{"state": "running", "startedAt": state.Running.StartedAt.Time.UTC().Format(time.RFC3339Nano)}</span>
+        case state.Terminated != nil:<span class="cov8" title="1">
+                return map[string]any{
+                        "state":      "terminated",
+                        "reason":     state.Terminated.Reason,
+                        "message":    state.Terminated.Message,
+                        "exitCode":   state.Terminated.ExitCode,
+                        "startedAt":  state.Terminated.StartedAt.Time.UTC().Format(time.RFC3339Nano),
+                        "finishedAt": state.Terminated.FinishedAt.Time.UTC().Format(time.RFC3339Nano),
+                }</span>
+        default:<span class="cov8" title="1">
+                return nil</span>
+        }
+}
+
+func nodeState(node *corev1.Node) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "metadata":    metadataState(node),
+                "conditions":  node.Status.Conditions,
+                "capacity":    node.Status.Capacity,
+                "allocatable": node.Status.Allocatable,
+        }
+}</span>
+
+func deploymentState(deployment *appsv1.Deployment) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "metadata":            metadataState(deployment),
+                "replicas":            deployment.Status.Replicas,
+                "readyReplicas":       deployment.Status.ReadyReplicas,
+                "availableReplicas":   deployment.Status.AvailableReplicas,
+                "updatedReplicas":     deployment.Status.UpdatedReplicas,
+                "unavailableReplicas": deployment.Status.UnavailableReplicas,
+                "observedGeneration":  deployment.Status.ObservedGeneration,
+                "conditions":          deployment.Status.Conditions,
+        }
+}</span>
+
+func statefulSetState(statefulSet *appsv1.StatefulSet) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "metadata":           metadataState(statefulSet),
+                "replicas":           statefulSet.Status.Replicas,
+                "readyReplicas":      statefulSet.Status.ReadyReplicas,
+                "availableReplicas":  statefulSet.Status.AvailableReplicas,
+                "updatedReplicas":    statefulSet.Status.UpdatedReplicas,
+                "currentReplicas":    statefulSet.Status.CurrentReplicas,
+                "observedGeneration": statefulSet.Status.ObservedGeneration,
+                "conditions":         statefulSet.Status.Conditions,
+        }
+}</span>
+
+func daemonSetState(daemonSet *appsv1.DaemonSet) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "metadata":               metadataState(daemonSet),
+                "desiredNumberScheduled": daemonSet.Status.DesiredNumberScheduled,
+                "currentNumberScheduled": daemonSet.Status.CurrentNumberScheduled,
+                "numberReady":            daemonSet.Status.NumberReady,
+                "updatedNumberScheduled": daemonSet.Status.UpdatedNumberScheduled,
+                "numberAvailable":        daemonSet.Status.NumberAvailable,
+                "numberUnavailable":      daemonSet.Status.NumberUnavailable,
+                "observedGeneration":     daemonSet.Status.ObservedGeneration,
+                "conditions":             daemonSet.Status.Conditions,
+        }
+}</span>
+
+func jobState(job *batchv1.Job) map[string]any <span class="cov8" title="1">{
+        return map[string]any{
+                "metadata":         metadataState(job),
+                "active":           job.Status.Active,
+                "succeeded":        job.Status.Succeeded,
+                "failed":           job.Status.Failed,
+                "ready":            job.Status.Ready,
+                "completedIndexes": job.Status.CompletedIndexes,
+                "failedIndexes":    job.Status.FailedIndexes,
+                "conditions":       job.Status.Conditions,
+                "startTime":        optionalTime(job.Status.StartTime),
+                "completionTime":   optionalTime(job.Status.CompletionTime),
+        }
+}</span>
+
+func optionalTime(t *metav1.Time) string <span class="cov8" title="1">{
+        if t == nil </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov0" title="0">return t.Time.UTC().Format(time.RFC3339Nano)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
