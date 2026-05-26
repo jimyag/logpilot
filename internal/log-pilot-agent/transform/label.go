@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"maps"
 
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 )
@@ -20,9 +21,7 @@ func (t *labelTransform) Transform(_ context.Context, records []input.Record) ([
 		if records[i].Meta == nil {
 			records[i].Meta = make(map[string]string)
 		}
-		for k, v := range t.fields {
-			records[i].Meta[k] = v
-		}
+		maps.Copy(records[i].Meta, t.fields)
 	}
 	return records, nil
 }

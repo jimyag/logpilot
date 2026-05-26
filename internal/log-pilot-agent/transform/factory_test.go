@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -9,6 +10,14 @@ import (
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 )
+
+func makeJSON(v interface{}) apiextensionsv1.JSON {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return apiextensionsv1.JSON{Raw: raw}
+}
 
 func TestNewFromSpecJSON(t *testing.T) {
 	spec := logpilotv1alpha1.TransformSpec{Type: "json"}
@@ -93,5 +102,74 @@ func TestNewSliceFromSpecsEmpty(t *testing.T) {
 	}
 	if len(transforms) != 0 {
 		t.Fatalf("expected 0 transforms, got %d", len(transforms))
+	}
+}
+
+func TestExtractStringMissingKey(t *testing.T) {
+	_, err := extractString(map[string]apiextensionsv1.JSON{}, "key")
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+}
+
+func TestExtractStringUnmarshalError(t *testing.T) {
+	cfg := map[string]apiextensionsv1.JSON{
+		"key": makeJSON(123),
+	}
+
+	_, err := extractString(cfg, "key")
+	if err == nil {
+		t.Fatal("expected unmarshal error")
+	}
+}
+
+func TestExtractStringMapMissingKey(t *testing.T) {
+	_, err := extractStringMap(map[string]apiextensionsv1.JSON{}, "fields")
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+}
+
+func TestExtractStringMapUnmarshalError(t *testing.T) {
+	cfg := map[string]apiextensionsv1.JSON{
+		"fields": makeJSON([]string{"not", "a", "map"}),
+	}
+
+	_, err := extractStringMap(cfg, "fields")
+	if err == nil {
+		t.Fatal("expected unmarshal error")
+	}
+}
+
+func TestNewFromSpecLabelMissingFields(t *testing.T) {
+	_, err := NewFromSpec(logpilotv1alpha1.TransformSpec{Type: "label", Config: map[string]apiextensionsv1.JSON{}})
+	if err == nil {
+		t.Fatal("expected missing fields error")
+	}
+}
+
+func TestNewFromSpecDropMissingKey(t *testing.T) {
+	_, err := NewFromSpec(logpilotv1alpha1.TransformSpec{Type: "drop", Config: map[string]apiextensionsv1.JSON{}})
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+}
+
+func TestNewFromSpecDropMissingValue(t *testing.T) {
+	_, err := NewFromSpec(logpilotv1alpha1.TransformSpec{
+		Type: "drop",
+		Config: map[string]apiextensionsv1.JSON{
+			"key": makeJSON("level"),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing value error")
+	}
+}
+
+func TestNewSliceFromSpecsError(t *testing.T) {
+	_, err := NewSliceFromSpecs([]logpilotv1alpha1.TransformSpec{{Type: "unknown_xyz"}})
+	if err == nil {
+		t.Fatal("expected slice construction error")
 	}
 }

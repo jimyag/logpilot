@@ -59,12 +59,10 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 	defer cancel()
 
-	for {
+	for runCtx.Err() == nil {
 		// Check for cancellation before reading so we don't consume records
 		// from the input without processing them (which would lose them on drain).
-		if runCtx.Err() != nil {
-			break
-		}
+
 		records, err := r.cfg.Input.ReadBatch(runCtx, r.cfg.BatchLen)
 		if err != nil {
 			break
@@ -199,4 +197,3 @@ func (r *Runner) shutdown() {
 		_ = r.cfg.Clean.Clean(clean.RunnerMeta{Lag: lag})
 	}
 }
-

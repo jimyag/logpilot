@@ -363,3 +363,94 @@ func TestSetClusterLogPilotPolicyCondition(t *testing.T) {
 		t.Fatalf("expected message invalid, got %q", condition.Message)
 	}
 }
+
+func TestValidateLogPilotPolicyInvalidStandaloneInput(t *testing.T) {
+	output := fileOutputSpec()
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Input:  &logpilotv1alpha1.InputSpec{Type: "bogus"},
+			Output: &output,
+		},
+	}
+
+	ok, message := validateLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "unknown input type") {
+		t.Fatalf("expected standalone input validation error, got ok=%v message=%q", ok, message)
+	}
+}
+
+func TestValidateLogPilotPolicyInvalidStandaloneOutput(t *testing.T) {
+	output := logpilotv1alpha1.OutputSpec{Type: "http"}
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Input:  &logpilotv1alpha1.InputSpec{Type: "file"},
+			Output: &output,
+		},
+	}
+
+	ok, message := validateLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "http output requires config.url") {
+		t.Fatalf("expected standalone output validation error, got ok=%v message=%q", ok, message)
+	}
+}
+
+func TestValidateLogPilotPolicyInvalidContainerOutputConfig(t *testing.T) {
+	container := validContainerPolicy()
+	container.Output = logpilotv1alpha1.OutputSpec{Type: "file"}
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Selector:   &metav1.LabelSelector{MatchLabels: map[string]string{"app": "demo"}},
+			Containers: []logpilotv1alpha1.ContainerPolicy{container},
+		},
+	}
+
+	ok, message := validateLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "containers[0]: file output requires config.path") {
+		t.Fatalf("expected container output validation error, got ok=%v message=%q", ok, message)
+	}
+}
+
+func TestValidateLogPilotPolicyInvalidTopLevelTransforms(t *testing.T) {
+	output := fileOutputSpec()
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Input:      &logpilotv1alpha1.InputSpec{Type: "file"},
+			Output:     &output,
+			Transforms: []logpilotv1alpha1.TransformSpec{{Type: "label"}},
+		},
+	}
+
+	ok, message := validateLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "label requires config.fields") {
+		t.Fatalf("expected transform validation error, got ok=%v message=%q", ok, message)
+	}
+}
+
+func TestValidateClusterLogPilotPolicyInvalidOutput(t *testing.T) {
+	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{
+		Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
+			Input:  logpilotv1alpha1.InputSpec{Type: "k8sEvent"},
+			Output: logpilotv1alpha1.OutputSpec{Type: "file"},
+		},
+	}
+
+	ok, message := validateClusterLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "file output requires config.path") {
+		t.Fatalf("expected cluster output validation error, got ok=%v message=%q", ok, message)
+	}
+}
+
+func TestValidateClusterLogPilotPolicyInvalidTransforms(t *testing.T) {
+	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{
+		Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
+			Input:      logpilotv1alpha1.InputSpec{Type: "k8sEvent"},
+			Output:     fileOutputSpec(),
+			Transforms: []logpilotv1alpha1.TransformSpec{{Type: "drop", Config: map[string]apiextensionsv1.JSON{"key": jsonValue(`"level"`)}}},
+		},
+	}
+
+	ok, message := validateClusterLogPilotPolicy(policy)
+	if ok || !strings.Contains(message, "drop requires config.value") {
+		t.Fatalf("expected cluster transform validation error, got ok=%v message=%q", ok, message)
+	}
+}

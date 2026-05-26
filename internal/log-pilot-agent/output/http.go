@@ -55,9 +55,9 @@ func NewHTTPOutput(cfg HTTPConfig) (Output, error) {
 }
 
 func (o *httpOutput) WriteBatch(ctx context.Context, records []input.Record) error {
-	entries := make([]map[string]interface{}, len(records))
+	entries := make([]map[string]any, len(records))
 	for i, r := range records {
-		entry := make(map[string]interface{}, len(r.Meta)+1)
+		entry := make(map[string]any, len(r.Meta)+1)
 		entry["data"] = string(r.Data)
 		for k, v := range r.Meta {
 			entry[k] = v

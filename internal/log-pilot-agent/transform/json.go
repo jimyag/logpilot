@@ -3,6 +3,7 @@ package transform
 import (
 	"context"
 	"encoding/json"
+	"maps"
 
 	"github.com/jimyag/logpilot/internal/log-pilot-agent/input"
 )
@@ -19,9 +20,7 @@ func (t *jsonTransform) Transform(_ context.Context, records []input.Record) ([]
 			if records[i].Meta == nil {
 				records[i].Meta = make(map[string]string)
 			}
-			for k, v := range m {
-				records[i].Meta[k] = v
-			}
+			maps.Copy(records[i].Meta, m)
 		}
 	}
 	return records, nil

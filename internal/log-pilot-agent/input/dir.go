@@ -391,10 +391,7 @@ func (d *dirInput) updateLag() {
 	if err != nil {
 		return
 	}
-	remaining := info.Size() - d.offset
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(info.Size()-d.offset, 0)
 	atomic.StoreInt64(&d.lag, remaining)
 }
 

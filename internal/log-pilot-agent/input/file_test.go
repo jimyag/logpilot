@@ -2,10 +2,13 @@ package input
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nxadm/tail"
 )
 
 func TestFileInputReadsLines(t *testing.T) {
@@ -307,4 +310,179 @@ func TestFileInputPassesFilterBothIncludeAndExclude(t *testing.T) {
 	if fi.passesFilter("goodbye.log") {
 		t.Fatal("expected missing include match to fail")
 	}
+}
+
+func TestFileInputReadBatchAfterCloseReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewFileInput(FileConfig{Path: path, ReadFrom: "oldest"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := in.(*fileInput)
+	if err := fi.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	batch, err := fi.ReadBatch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch != nil {
+		t.Fatalf("expected nil batch after Close, got %v", batch)
+	}
+}
+
+func TestFileInputReadBatchSkipsErroredLines(t *testing.T) {
+	lines := make(chan *tail.Line, 2)
+	lines <- &tail.Line{Err: errors.New("bad line")}
+	lines <- &tail.Line{Text: "good"}
+	close(lines)
+
+	fi := &fileInput{
+		cfg:  FileConfig{Path: "/var/log/app.log"},
+		tail: &tail.Tail{Lines: lines},
+	}
+
+	batch, err := fi.ReadBatch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 1 || string(batch[0].Data) != "good" {
+		t.Fatalf("expected only the good line, got %+v", batch)
+	}
+}
+
+func TestFileInputReadBatchSkipsFilteredLines(t *testing.T) {
+	lines := make(chan *tail.Line, 1)
+	lines <- &tail.Line{Text: "skip"}
+	close(lines)
+
+	fi := &fileInput{
+		cfg:       FileConfig{Path: "/var/log/app.log"},
+		tail:      &tail.Tail{Lines: lines},
+		includeRe: compilePatterns([]string{`.*\.txt$`}),
+	}
+
+	batch, err := fi.ReadBatch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 0 {
+		t.Fatalf("expected filtered line to be skipped, got %+v", batch)
+	}
+}
+
+func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewFileInput(FileConfig{Path: path, ReadFrom: "oldest"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := in.(*fileInput)
+	defer fi.Close()
+
+	fi.commitOffset()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "app.log" {
+		t.Fatalf("expected only the log file to remain, got %v", entries)
+	}
+}
+
+func TestFileInputCommitOffsetMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewFileInput(FileConfig{Path: path, ReadFrom: "oldest", MetaPath: filepath.Join(blocker, "app.offset")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := in.(*fileInput)
+	defer fi.Close()
+
+	fi.commitOffset()
+
+	if _, err := os.Stat(filepath.Join(blocker, "app.offset.tmp")); err == nil {
+		t.Fatal("expected no temp offset file to be written when mkdir fails")
+	}
+}
+
+func TestFileInputCommitOffsetWriteFileError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(dir, "app.offset")
+	if err := os.Mkdir(metaPath+".tmp", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewFileInput(FileConfig{Path: path, ReadFrom: "oldest", MetaPath: metaPath}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := in.(*fileInput)
+	defer fi.Close()
+
+	fi.commitOffset()
+
+	if _, err := os.Stat(metaPath); err == nil {
+		t.Fatal("expected final offset file not to be written when temp file path is a directory")
+	}
+}
+
+func TestFileInputReadBatchCancelledContext(t *testing.T) {
+	fi := &fileInput{tail: &tail.Tail{Lines: make(chan *tail.Line)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := 0; i < 256; i++ {
+		batch, err := fi.ReadBatch(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) != 0 {
+			t.Fatalf("expected empty batch, got %v", batch)
+		}
+	}
+}
+
+func TestFileInputCommitOffsetAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := NewFileInput(FileConfig{Path: path, ReadFrom: "oldest"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := in.(*fileInput)
+	if err := fi.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fi.commitOffset()
 }

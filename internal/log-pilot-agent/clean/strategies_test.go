@@ -190,3 +190,32 @@ func TestRetainCleanShouldCleanWithOldFile(t *testing.T) {
 		t.Fatal("expected ShouldClean=true when old files exceed retain period")
 	}
 }
+
+func TestAfterCollectedCleanDirNotExist(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "afterCollected"}, dir)
+	if err := c.Clean(RunnerMeta{}); err != nil {
+		t.Fatalf("expected nil error for missing dir, got %v", err)
+	}
+}
+
+func TestRetainCleanShouldCleanDirNotExist(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 7}, dir)
+
+	should, err := c.ShouldClean(RunnerMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if should {
+		t.Fatal("expected ShouldClean=false when retain dir does not exist")
+	}
+}
+
+func TestRetainCleanCleanDirNotExist(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 7}, dir)
+	if err := c.Clean(RunnerMeta{}); err != nil {
+		t.Fatalf("expected nil error for missing dir, got %v", err)
+	}
+}

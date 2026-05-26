@@ -108,10 +108,7 @@ func NewFileInput(cfg FileConfig, metaDir string) (Input, error) {
 		default: // oldest
 			startOffset = 0
 		}
-		lag := info.Size() - startOffset
-		if lag < 0 {
-			lag = 0
-		}
+		lag := max(info.Size()-startOffset, 0)
 		atomic.StoreInt64(&fi.lag, lag)
 	}
 
@@ -183,10 +180,7 @@ func (f *fileInput) commitOffset() {
 
 	// Update in-memory lag.
 	if info, err := os.Stat(f.cfg.Path); err == nil {
-		remaining := info.Size() - pos
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(info.Size()-pos, 0)
 		atomic.StoreInt64(&f.lag, remaining)
 	}
 

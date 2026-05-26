@@ -29,7 +29,7 @@ func (o *fileOutput) WriteBatch(_ context.Context, records []input.Record) error
 	}
 	enc := json.NewEncoder(o.f)
 	for _, r := range records {
-		entry := make(map[string]interface{}, len(r.Meta)+1)
+		entry := make(map[string]any, len(r.Meta)+1)
 		entry["data"] = string(r.Data)
 		for k, v := range r.Meta {
 			entry[k] = v

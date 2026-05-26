@@ -230,8 +230,8 @@ func (k *k8sObjectStateInput) handleObject(ctx context.Context, ev watch.Event) 
 	}
 }
 
-func (k *k8sObjectStateInput) enqueue(ctx context.Context, kind, action string, state map[string]interface{}) error {
-	record := map[string]interface{}{
+func (k *k8sObjectStateInput) enqueue(ctx context.Context, kind, action string, state map[string]any) error {
+	record := map[string]any{
 		"kind":      kind,
 		"action":    action,
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
@@ -276,8 +276,8 @@ func (k *k8sObjectStateInput) Close() error {
 	return nil
 }
 
-func metadataState(obj metav1.Object) map[string]interface{} {
-	return map[string]interface{}{
+func metadataState(obj metav1.Object) map[string]any {
+	return map[string]any{
 		"name":            obj.GetName(),
 		"namespace":       obj.GetNamespace(),
 		"uid":             string(obj.GetUID()),
@@ -288,10 +288,10 @@ func metadataState(obj metav1.Object) map[string]interface{} {
 	}
 }
 
-func podState(pod *corev1.Pod) map[string]interface{} {
-	containers := make([]map[string]interface{}, 0, len(pod.Status.ContainerStatuses))
+func podState(pod *corev1.Pod) map[string]any {
+	containers := make([]map[string]any, 0, len(pod.Status.ContainerStatuses))
 	for _, status := range pod.Status.ContainerStatuses {
-		containers = append(containers, map[string]interface{}{
+		containers = append(containers, map[string]any{
 			"name":         status.Name,
 			"ready":        status.Ready,
 			"restartCount": status.RestartCount,
@@ -299,7 +299,7 @@ func podState(pod *corev1.Pod) map[string]interface{} {
 			"lastState":    containerState(status.LastTerminationState),
 		})
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"metadata":          metadataState(pod),
 		"nodeName":          pod.Spec.NodeName,
 		"phase":             string(pod.Status.Phase),
@@ -310,14 +310,14 @@ func podState(pod *corev1.Pod) map[string]interface{} {
 	}
 }
 
-func containerState(state corev1.ContainerState) map[string]interface{} {
+func containerState(state corev1.ContainerState) map[string]any {
 	switch {
 	case state.Waiting != nil:
-		return map[string]interface{}{"state": "waiting", "reason": state.Waiting.Reason, "message": state.Waiting.Message}
+		return map[string]any{"state": "waiting", "reason": state.Waiting.Reason, "message": state.Waiting.Message}
 	case state.Running != nil:
-		return map[string]interface{}{"state": "running", "startedAt": state.Running.StartedAt.Time.UTC().Format(time.RFC3339Nano)}
+		return map[string]any{"state": "running", "startedAt": state.Running.StartedAt.Time.UTC().Format(time.RFC3339Nano)}
 	case state.Terminated != nil:
-		return map[string]interface{}{
+		return map[string]any{
 			"state":      "terminated",
 			"reason":     state.Terminated.Reason,
 			"message":    state.Terminated.Message,
@@ -330,8 +330,8 @@ func containerState(state corev1.ContainerState) map[string]interface{} {
 	}
 }
 
-func nodeState(node *corev1.Node) map[string]interface{} {
-	return map[string]interface{}{
+func nodeState(node *corev1.Node) map[string]any {
+	return map[string]any{
 		"metadata":    metadataState(node),
 		"conditions":  node.Status.Conditions,
 		"capacity":    node.Status.Capacity,
@@ -339,8 +339,8 @@ func nodeState(node *corev1.Node) map[string]interface{} {
 	}
 }
 
-func deploymentState(deployment *appsv1.Deployment) map[string]interface{} {
-	return map[string]interface{}{
+func deploymentState(deployment *appsv1.Deployment) map[string]any {
+	return map[string]any{
 		"metadata":            metadataState(deployment),
 		"replicas":            deployment.Status.Replicas,
 		"readyReplicas":       deployment.Status.ReadyReplicas,
@@ -352,8 +352,8 @@ func deploymentState(deployment *appsv1.Deployment) map[string]interface{} {
 	}
 }
 
-func statefulSetState(statefulSet *appsv1.StatefulSet) map[string]interface{} {
-	return map[string]interface{}{
+func statefulSetState(statefulSet *appsv1.StatefulSet) map[string]any {
+	return map[string]any{
 		"metadata":           metadataState(statefulSet),
 		"replicas":           statefulSet.Status.Replicas,
 		"readyReplicas":      statefulSet.Status.ReadyReplicas,
@@ -365,8 +365,8 @@ func statefulSetState(statefulSet *appsv1.StatefulSet) map[string]interface{} {
 	}
 }
 
-func daemonSetState(daemonSet *appsv1.DaemonSet) map[string]interface{} {
-	return map[string]interface{}{
+func daemonSetState(daemonSet *appsv1.DaemonSet) map[string]any {
+	return map[string]any{
 		"metadata":               metadataState(daemonSet),
 		"desiredNumberScheduled": daemonSet.Status.DesiredNumberScheduled,
 		"currentNumberScheduled": daemonSet.Status.CurrentNumberScheduled,
@@ -379,8 +379,8 @@ func daemonSetState(daemonSet *appsv1.DaemonSet) map[string]interface{} {
 	}
 }
 
-func jobState(job *batchv1.Job) map[string]interface{} {
-	return map[string]interface{}{
+func jobState(job *batchv1.Job) map[string]any {
+	return map[string]any{
 		"metadata":         metadataState(job),
 		"active":           job.Status.Active,
 		"succeeded":        job.Status.Succeeded,

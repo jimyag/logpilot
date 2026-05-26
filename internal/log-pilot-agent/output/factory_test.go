@@ -173,7 +173,7 @@ func TestNewFromSpecHTTPInvalidCACert(t *testing.T) {
 	}
 }
 
-func mustJSON(t *testing.T, v interface{}) apiextensionsv1.JSON {
+func mustJSON(t *testing.T, v any) apiextensionsv1.JSON {
 	t.Helper()
 	raw, err := json.Marshal(v)
 	if err != nil {

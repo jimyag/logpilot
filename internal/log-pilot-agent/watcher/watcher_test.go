@@ -3,19 +3,25 @@ package watcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	k8swatch "k8s.io/apimachinery/pkg/watch"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -127,6 +133,27 @@ func TestBuildRunnerNoOutput(t *testing.T) {
 	}
 	if r != nil {
 		t.Fatal("expected nil runner for bad output config")
+	}
+}
+
+func TestBuildRunnerInvalidTransform(t *testing.T) {
+	cp := logpilotv1alpha1.ContainerPolicy{
+		Name:       "app",
+		LogType:    "applog",
+		Transforms: []logpilotv1alpha1.TransformSpec{{Type: "unknown"}},
+		Output: logpilotv1alpha1.OutputSpec{
+			Type: "file",
+			Config: map[string]apiextensionsv1.JSON{
+				"path": {Raw: []byte(`"` + filepath.Join(t.TempDir(), "out.json") + `"`)},
+			},
+		},
+	}
+	r, err := buildRunner(cp, t.TempDir(), "test-uid", Config{MetaDir: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected invalid transform to fail")
+	}
+	if r != nil {
+		t.Fatal("expected nil runner for invalid transform")
 	}
 }
 
@@ -367,6 +394,166 @@ func TestOnPodAddInvalidAnnotation(t *testing.T) {
 	}
 }
 
+func TestOnPodAddStartsRunnerForValidPolicy(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "out.json")
+	policy := logpilotv1alpha1.ContainerPolicy{
+		Name:    "app",
+		LogType: "applog",
+		Path:    "/var/log/app",
+		Output: logpilotv1alpha1.OutputSpec{
+			Type: "file",
+			Config: map[string]apiextensionsv1.JSON{
+				"path": {Raw: []byte(`"` + outPath + `"`)},
+			},
+		},
+	}
+	pod := podWithPolicies(t, "uid-valid", policy)
+	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir(), MetaDir: t.TempDir()})
+
+	if ok := w.OnPodAdd(pod); !ok {
+		t.Fatal("expected pod with valid policy to be ready")
+	}
+
+	key := runnerKey(string(pod.UID), policy.Name, policy.LogType)
+	w.mu.Lock()
+	entry := w.runners[key]
+	w.mu.Unlock()
+	if entry == nil {
+		t.Fatalf("expected runner %q to be created", key)
+	}
+	if info, err := os.Stat(entry.logPath); err != nil {
+		t.Fatalf("expected log path to exist: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("expected %s to be a directory", entry.logPath)
+	}
+
+	w.StopAll()
+	waitRunnerDone(t, entry.r.Done())
+}
+
+func TestOnPodAddBuildRunnerFailureReturnsNotReady(t *testing.T) {
+	policy := logpilotv1alpha1.ContainerPolicy{
+		Name:    "app",
+		LogType: "applog",
+		Path:    "/var/log/app",
+		Output:  logpilotv1alpha1.OutputSpec{Type: "unknown"},
+	}
+	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir(), MetaDir: t.TempDir()})
+
+	if ok := w.OnPodAdd(podWithPolicies(t, "uid-bad-output", policy)); ok {
+		t.Fatal("expected invalid output policy to report not ready")
+	}
+	if len(w.runners) != 0 {
+		t.Fatalf("expected no runners, got %d", len(w.runners))
+	}
+}
+
+func TestOnPodAddEnsureLogPathFailureReturnsNotReady(t *testing.T) {
+	logDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(logDir, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	policy := logpilotv1alpha1.ContainerPolicy{
+		Name:    "app",
+		LogType: "applog",
+		Path:    "/var/log/app",
+		Output: logpilotv1alpha1.OutputSpec{
+			Type: "file",
+			Config: map[string]apiextensionsv1.JSON{
+				"path": {Raw: []byte(`"` + filepath.Join(t.TempDir(), "out.json") + `"`)},
+			},
+		},
+	}
+	w := newTestWatcherWithConfig(t, Config{LogDir: logDir, MetaDir: t.TempDir()})
+
+	if ok := w.OnPodAdd(podWithPolicies(t, "uid-bad-logdir", policy)); ok {
+		t.Fatal("expected log path failure to report not ready")
+	}
+	if len(w.runners) != 0 {
+		t.Fatalf("expected no runners, got %d", len(w.runners))
+	}
+}
+
+func TestSyncPodsSeenPodIsSkipped(t *testing.T) {
+	policy := logpilotv1alpha1.ContainerPolicy{
+		Name:    "app",
+		LogType: "applog",
+		Path:    "/var/log/app",
+		Output: logpilotv1alpha1.OutputSpec{
+			Type: "file",
+			Config: map[string]apiextensionsv1.JSON{
+				"path": {Raw: []byte(`"` + filepath.Join(t.TempDir(), "out.json") + `"`)},
+			},
+		},
+	}
+	pod := podWithPolicies(t, "uid-seen", policy)
+	pod.Spec.NodeName = "node1"
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		newIndexedPodClient(t, pod),
+		kubefake.NewSimpleClientset(),
+		status.New(),
+	)
+	seen := map[string]bool{string(pod.UID): true}
+
+	if err := w.syncPods(context.Background(), seen); err != nil {
+		t.Fatalf("expected sync to succeed, got %v", err)
+	}
+	if !seen[string(pod.UID)] {
+		t.Fatalf("expected pod %q to remain seen", pod.UID)
+	}
+	if len(w.runners) != 0 {
+		t.Fatalf("expected seen pod to be skipped, got %d runners", len(w.runners))
+	}
+}
+
+func TestSyncPodsRemovesMissingSeenPod(t *testing.T) {
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		newIndexedPodClient(t),
+		kubefake.NewSimpleClientset(),
+		status.New(),
+	)
+	r := newRunningRunner(t)
+	key := runnerKey("uid-missing", "app", "applog")
+	w.mu.Lock()
+	w.runners[key] = &runnerEntry{r: r}
+	w.mu.Unlock()
+	seen := map[string]bool{"uid-missing": true}
+
+	if err := w.syncPods(context.Background(), seen); err != nil {
+		t.Fatalf("expected sync to succeed, got %v", err)
+	}
+	if seen["uid-missing"] {
+		t.Fatal("expected missing pod to be removed from seen")
+	}
+	waitRunnerDone(t, r.Done())
+}
+
+func TestSyncPodsLeavesPodUnseenWhenRunnerNotReady(t *testing.T) {
+	pod := podWithPolicies(t, "uid-unready", logpilotv1alpha1.ContainerPolicy{
+		Name:    "app",
+		LogType: "applog",
+		Path:    "/var/log/app",
+		Output:  logpilotv1alpha1.OutputSpec{Type: "unknown"},
+	})
+	pod.Spec.NodeName = "node1"
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		newIndexedPodClient(t, pod),
+		kubefake.NewSimpleClientset(),
+		status.New(),
+	)
+	seen := make(map[string]bool)
+
+	if err := w.syncPods(context.Background(), seen); err != nil {
+		t.Fatalf("expected sync to succeed, got %v", err)
+	}
+	if seen[string(pod.UID)] {
+		t.Fatalf("expected pod %q to remain unseen", pod.UID)
+	}
+}
+
 func TestSyncPodsEmptyList(t *testing.T) {
 	scheme := newTestScheme(t)
 	c := clientfake.NewClientBuilder().
@@ -383,6 +570,27 @@ func TestSyncPodsEmptyList(t *testing.T) {
 	}
 	if len(seen) != 0 {
 		t.Fatalf("expected no seen pods, got %#v", seen)
+	}
+}
+
+func TestSyncPodsAddsReadyPod(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid-ready"},
+		Spec:       corev1.PodSpec{NodeName: "node1"},
+	}
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		newIndexedPodClient(t, pod),
+		kubefake.NewSimpleClientset(),
+		status.New(),
+	)
+	seen := make(map[string]bool)
+
+	if err := w.syncPods(context.Background(), seen); err != nil {
+		t.Fatalf("expected sync to succeed, got %v", err)
+	}
+	if !seen[string(pod.UID)] {
+		t.Fatalf("expected pod %q to be marked seen", pod.UID)
 	}
 }
 
@@ -478,6 +686,34 @@ func TestConsumePodWatchErrorEvent(t *testing.T) {
 	}
 }
 
+func TestConsumePodWatchClusterTickReconcilesPolicies(t *testing.T) {
+	policy := newClusterPolicy("policy-a", "k8sEvent", filepath.Join(t.TempDir(), "out.json"))
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()}, &policy)
+	fw := k8swatch.NewFake()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clusterSeen := make(map[string]bool)
+	tick := make(chan time.Time, 1)
+	done := make(chan error, 1)
+	key := "ClusterLogPilotPolicy/policy-a"
+
+	go func() {
+		done <- w.consumePodWatch(ctx, fw, make(map[string]bool), clusterSeen, tick)
+	}()
+	tick <- time.Now()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	fw.Stop()
+
+	if err := <-done; err != nil {
+		t.Fatalf("expected nil on ctx cancel, got %v", err)
+	}
+	if !clusterSeen[key] {
+		t.Fatalf("expected cluster policy %q to be seen", key)
+	}
+	w.stopRunner(key)
+}
+
 func TestAcquireClusterPolicyLeaseNoNamespace(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{NodeName: "node1"})
 
@@ -499,6 +735,120 @@ func TestAcquireClusterPolicyLeaseCreateNew(t *testing.T) {
 	}
 	if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != "node1" {
 		t.Fatalf("expected holder identity node1, got %#v", lease.Spec.HolderIdentity)
+	}
+}
+
+func TestAcquireClusterPolicyLeaseHeldByOtherNode(t *testing.T) {
+	other := "node2"
+	duration := int32(30)
+	renewed := metav1.NewMicroTime(time.Now())
+	lease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: dns1123Name("logpilot-cluster-policy-my-policy"), Namespace: "default"},
+		Spec: coordinationv1.LeaseSpec{
+			HolderIdentity:       &other,
+			LeaseDurationSeconds: &duration,
+			RenewTime:            &renewed,
+		},
+	}
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1"}, lease)
+
+	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); got {
+		t.Fatal("expected active lease held by another node to fail")
+	}
+}
+
+func TestAcquireClusterPolicyLeaseRenewsSameHolder(t *testing.T) {
+	holder := "node1"
+	duration := int32(30)
+	oldRenew := metav1.NewMicroTime(time.Now().Add(-time.Minute))
+	leaseName := dns1123Name("logpilot-cluster-policy-my-policy")
+	lease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: leaseName, Namespace: "default"},
+		Spec: coordinationv1.LeaseSpec{
+			HolderIdentity:       &holder,
+			LeaseDurationSeconds: &duration,
+			RenewTime:            &oldRenew,
+		},
+	}
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1"}, lease)
+
+	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); !got {
+		t.Fatal("expected same holder to renew lease")
+	}
+
+	updated := &coordinationv1.Lease{}
+	if err := w.client.Get(context.Background(), ctrlclient.ObjectKey{Namespace: "default", Name: leaseName}, updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Spec.AcquireTime == nil {
+		t.Fatal("expected missing acquire time to be set on renewal")
+	}
+	if updated.Spec.RenewTime == nil || !updated.Spec.RenewTime.After(oldRenew.Time) {
+		t.Fatalf("expected renew time to advance, got %#v", updated.Spec.RenewTime)
+	}
+}
+
+func TestAcquireClusterPolicyLeaseRetriesAlreadyExists(t *testing.T) {
+	leaseName := dns1123Name("logpilot-cluster-policy-my-policy")
+	baseClient := clientfake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
+	createCalls := 0
+	client := &interceptClient{
+		Client: baseClient,
+		createHook: func(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.CreateOption) error {
+			createCalls++
+			if createCalls != 1 {
+				return baseClient.Create(ctx, obj, opts...)
+			}
+			lease := obj.(*coordinationv1.Lease).DeepCopy()
+			if err := baseClient.Create(ctx, lease); err != nil {
+				t.Fatalf("seed lease on already-exists path: %v", err)
+			}
+			return apierrors.NewAlreadyExists(schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}, lease.Name)
+		},
+	}
+	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New())
+
+	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); !got {
+		t.Fatal("expected already-exists retry to succeed")
+	}
+	lease := &coordinationv1.Lease{}
+	if err := baseClient.Get(context.Background(), ctrlclient.ObjectKey{Namespace: "default", Name: leaseName}, lease); err != nil {
+		t.Fatal(err)
+	}
+	if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != "node1" {
+		t.Fatalf("expected holder identity node1, got %#v", lease.Spec.HolderIdentity)
+	}
+}
+
+func TestAcquireClusterPolicyLeaseRetriesConflict(t *testing.T) {
+	holder := "node1"
+	duration := int32(30)
+	leaseName := dns1123Name("logpilot-cluster-policy-my-policy")
+	baseClient := clientfake.NewClientBuilder().WithScheme(newTestScheme(t)).WithRuntimeObjects(&coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: leaseName, Namespace: "default"},
+		Spec: coordinationv1.LeaseSpec{
+			HolderIdentity:       &holder,
+			LeaseDurationSeconds: &duration,
+		},
+	}).Build()
+	updateCalls := 0
+	client := &interceptClient{
+		Client: baseClient,
+		updateHook: func(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.UpdateOption) error {
+			updateCalls++
+			if updateCalls == 1 {
+				return apierrors.NewConflict(schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}, obj.GetName(), fmt.Errorf("conflict"))
+			}
+			return baseClient.Update(ctx, obj, opts...)
+		},
+	}
+	w := New(Config{Namespace: "default", NodeName: "node1"}, client, kubefake.NewSimpleClientset(), status.New())
+
+	if got := w.acquireClusterPolicyLease(context.Background(), "my-policy"); !got {
+		t.Fatal("expected conflict retry to succeed")
+	}
+	if updateCalls < 2 {
+		t.Fatalf("expected at least two update attempts, got %d", updateCalls)
 	}
 }
 
@@ -531,6 +881,63 @@ func TestReconcileClusterPoliciesNoNamespace(t *testing.T) {
 	}
 }
 
+func TestReconcileClusterPoliciesLifecycle(t *testing.T) {
+	policy := newClusterPolicy("policy-a", "k8sEvent", filepath.Join(t.TempDir(), "out.json"))
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()}, &policy)
+	seen := make(map[string]bool)
+	key := "ClusterLogPilotPolicy/policy-a"
+
+	w.reconcileClusterPolicies(context.Background(), seen)
+	if !seen[key] {
+		t.Fatalf("expected policy %q to be seen", key)
+	}
+	w.mu.Lock()
+	entry := w.runners[key]
+	w.mu.Unlock()
+	if entry == nil {
+		t.Fatalf("expected runner %q to exist", key)
+	}
+
+	w.reconcileClusterPolicies(context.Background(), seen)
+	if err := w.client.Delete(context.Background(), &policy); err != nil {
+		t.Fatal(err)
+	}
+	w.reconcileClusterPolicies(context.Background(), seen)
+	if seen[key] {
+		t.Fatalf("expected policy %q to be removed after deletion", key)
+	}
+	waitRunnerDone(t, entry.r.Done())
+}
+
+func TestReconcileClusterPoliciesStopsRunnerWhenLeaseLost(t *testing.T) {
+	other := "node2"
+	duration := int32(30)
+	renewed := metav1.NewMicroTime(time.Now())
+	policy := newClusterPolicy("policy-a", "k8sEvent", filepath.Join(t.TempDir(), "out.json"))
+	lease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: dns1123Name("logpilot-cluster-policy-policy-a"), Namespace: "default"},
+		Spec: coordinationv1.LeaseSpec{
+			HolderIdentity:       &other,
+			LeaseDurationSeconds: &duration,
+			RenewTime:            &renewed,
+		},
+	}
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()}, &policy, lease)
+	key := "ClusterLogPilotPolicy/policy-a"
+	r := newRunningRunner(t)
+	w.mu.Lock()
+	w.runners[key] = &runnerEntry{r: r}
+	w.mu.Unlock()
+	seen := map[string]bool{key: true}
+
+	w.reconcileClusterPolicies(context.Background(), seen)
+
+	if seen[key] {
+		t.Fatalf("expected policy %q to be removed after lease loss", key)
+	}
+	waitRunnerDone(t, r.Done())
+}
+
 func TestStartClusterPolicyRunner(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()})
 	key := "ClusterLogPilotPolicy/policy-a"
@@ -547,6 +954,286 @@ func TestStartClusterPolicyRunner(t *testing.T) {
 	if !exists {
 		t.Fatalf("expected runner %q to exist", key)
 	}
+}
+
+func TestStartClusterPolicyRunnerIgnoresUnsupportedInput(t *testing.T) {
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()})
+	key := "ClusterLogPilotPolicy/policy-a"
+	policy := newClusterPolicy("policy-a", "dir", filepath.Join(t.TempDir(), "out.json"))
+
+	if ok := w.startClusterPolicyRunner(policy, key); !ok {
+		t.Fatal("expected unsupported input type to be ignored successfully")
+	}
+	if len(w.runners) != 0 {
+		t.Fatalf("expected no runners for unsupported input, got %d", len(w.runners))
+	}
+}
+
+func TestStartClusterPolicyRunnerBadTransform(t *testing.T) {
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()})
+	policy := newClusterPolicy("policy-a", "k8sEvent", filepath.Join(t.TempDir(), "out.json"))
+	policy.Spec.Transforms = []logpilotv1alpha1.TransformSpec{{Type: "unknown"}}
+
+	if ok := w.startClusterPolicyRunner(policy, "ClusterLogPilotPolicy/policy-a"); ok {
+		t.Fatal("expected invalid transform to prevent runner start")
+	}
+}
+
+func TestStartClusterPolicyRunnerObjectState(t *testing.T) {
+	w := newTestWatcherWithConfig(t, Config{Namespace: "default", NodeName: "node1", MetaDir: t.TempDir()})
+	key := "ClusterLogPilotPolicy/policy-object-state"
+	policy := newClusterPolicy("policy-object-state", "k8sObjectState", filepath.Join(t.TempDir(), "out.json"))
+	policy.Spec.Input.Config = map[string]apiextensionsv1.JSON{
+		"namespaces": {Raw: []byte(`["default"]`)},
+		"resources":  {Raw: []byte(`["node"]`)},
+	}
+	defer w.stopRunner(key)
+
+	if ok := w.startClusterPolicyRunner(policy, key); !ok {
+		t.Fatal("expected object state runner to start")
+	}
+
+	w.mu.Lock()
+	_, exists := w.runners[key]
+	w.mu.Unlock()
+	if !exists {
+		t.Fatalf("expected runner %q to exist", key)
+	}
+}
+
+func TestStopAllStopsRunningRunners(t *testing.T) {
+	w := newTestWatcher(t)
+	r1 := newRunningRunner(t)
+	r2 := newRunningRunner(t)
+	w.mu.Lock()
+	w.runners["uid1/app/log"] = &runnerEntry{r: r1}
+	w.runners["uid2/app/log"] = &runnerEntry{r: r2}
+	w.mu.Unlock()
+
+	w.StopAll()
+
+	waitRunnerDone(t, r1.Done())
+	waitRunnerDone(t, r2.Done())
+}
+
+func TestWatcherStartContextCancel(t *testing.T) {
+	scheme := newTestScheme(t)
+	c := clientfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}
+		}).
+		Build()
+
+	kube := kubefake.NewSimpleClientset()
+	fw := k8swatch.NewFake()
+	watchStarted := make(chan struct{})
+	once := sync.Once{}
+	kube.PrependWatchReactor("pods", func(action k8stesting.Action) (bool, k8swatch.Interface, error) {
+		once.Do(func() { close(watchStarted) })
+		return true, fw, nil
+	})
+
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		c,
+		kube,
+		status.New(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Start(ctx) }()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not start in time")
+	}
+	cancel()
+	fw.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return in time")
+	}
+}
+
+func TestWatcherStartWatchChannelClosedThenCancel(t *testing.T) {
+	scheme := newTestScheme(t)
+	c := clientfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}
+		}).
+		Build()
+
+	kube := kubefake.NewSimpleClientset()
+	callCount := 0
+	var mu sync.Mutex
+	fw1 := k8swatch.NewFake()
+	fw2 := k8swatch.NewFake()
+	firstWatchStarted := make(chan struct{})
+	secondWatchStarted := make(chan struct{})
+	kube.PrependWatchReactor("pods", func(action k8stesting.Action) (bool, k8swatch.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		callCount++
+		if callCount == 1 {
+			close(firstWatchStarted)
+			return true, fw1, nil
+		}
+		if callCount == 2 {
+			close(secondWatchStarted)
+		}
+		return true, fw2, nil
+	})
+
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		c,
+		kube,
+		status.New(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Start(ctx) }()
+
+	select {
+	case <-firstWatchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first watch did not start in time")
+	}
+	fw1.Stop()
+
+	select {
+	case <-secondWatchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second watch did not start in time")
+	}
+	cancel()
+	fw2.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return in time")
+	}
+}
+
+func TestWatcherStartWatchErrorThenCancel(t *testing.T) {
+	scheme := newTestScheme(t)
+	c := clientfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}
+		}).
+		Build()
+
+	kube := kubefake.NewSimpleClientset()
+	callCount := 0
+	var mu sync.Mutex
+	fw := k8swatch.NewFake()
+	firstWatchAttempted := make(chan struct{})
+	kube.PrependWatchReactor("pods", func(action k8stesting.Action) (bool, k8swatch.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		callCount++
+		if callCount == 1 {
+			close(firstWatchAttempted)
+			return true, nil, fmt.Errorf("transient watch error")
+		}
+		return true, fw, nil
+	})
+
+	w := New(
+		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
+		c,
+		kube,
+		status.New(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Start(ctx) }()
+
+	select {
+	case <-firstWatchAttempted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch error path was not exercised in time")
+	}
+	cancel()
+	fw.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return in time")
+	}
+}
+
+func podWithPolicies(t *testing.T, uid string, policies ...logpilotv1alpha1.ContainerPolicy) *corev1.Pod {
+	t.Helper()
+
+	raw, err := json.Marshal(policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:      "mypod",
+		Namespace: "default",
+		UID:       types.UID(uid),
+		Annotations: map[string]string{
+			podLogPolicyAnnotation: string(raw),
+		},
+	}}
+}
+
+func newIndexedPodClient(t *testing.T, objs ...runtime.Object) ctrlclient.Client {
+	t.Helper()
+
+	return clientfake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithRuntimeObjects(objs...).
+		WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}
+		}).
+		Build()
+}
+
+type interceptClient struct {
+	ctrlclient.Client
+	createHook func(context.Context, ctrlclient.Object, ...ctrlclient.CreateOption) error
+	updateHook func(context.Context, ctrlclient.Object, ...ctrlclient.UpdateOption) error
+}
+
+func (c *interceptClient) Create(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.CreateOption) error {
+	if c.createHook != nil {
+		return c.createHook(ctx, obj, opts...)
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func (c *interceptClient) Update(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.UpdateOption) error {
+	if c.updateHook != nil {
+		return c.updateHook(ctx, obj, opts...)
+	}
+	return c.Client.Update(ctx, obj, opts...)
 }
 
 func newTestScheme(t *testing.T) *runtime.Scheme {

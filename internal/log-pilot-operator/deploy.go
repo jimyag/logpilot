@@ -328,8 +328,9 @@ func preserveImmutableAndRuntimeFields(existing, desired client.Object) {
 	}
 }
 
+//go:fix inline
 func ptrInt64(v int64) *int64 {
-	return &v
+	return new(v)
 }
 
 func intstrFromInt(v int) intstr.IntOrString {

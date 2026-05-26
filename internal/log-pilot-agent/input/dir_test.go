@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -335,6 +336,367 @@ func TestDirInputPruneStaleInodesRemovesMissing(t *testing.T) {
 	}
 }
 
+func TestDirInputReadBatchStopped(t *testing.T) {
+	di := &dirInput{}
+	atomic.StoreInt32(&di.stopped, 1)
+
+	batch, err := di.ReadBatch(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch != nil {
+		t.Fatalf("expected nil batch when stopped, got %v", batch)
+	}
+}
+
+func TestDirInputOpenFileNoFiles(t *testing.T) {
+	di := &dirInput{cfg: DirConfig{Dir: t.TempDir(), ReadFrom: "oldest"}}
+
+	if err := di.openFile(); err == nil {
+		t.Fatal("expected openFile to fail when directory has no files")
+	}
+}
+
+func TestDirInputOpenFileNewestStartsAtEnd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	content := "line1\nline2\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	di := &dirInput{cfg: DirConfig{Dir: dir, ReadFrom: "newest"}}
+	if err := di.openFile(); err != nil {
+		t.Fatal(err)
+	}
+	defer di.currentF.Close()
+
+	if di.currentFile != path {
+		t.Fatalf("expected current file %q, got %q", path, di.currentFile)
+	}
+	if di.offset != int64(len(content)) {
+		t.Fatalf("expected offset %d, got %d", len(content), di.offset)
+	}
+	if got := di.Lag(); got != 0 {
+		t.Fatalf("expected lag 0 at end of file, got %d", got)
+	}
+}
+
+func TestDirInputOpenFileClearsMissingCurrentFile(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.log")
+	di := &dirInput{cfg: DirConfig{Dir: dir}, currentFile: missing, offset: 12}
+
+	if err := di.openFile(); err == nil {
+		t.Fatal("expected openFile to fail for missing current file")
+	}
+	if di.currentFile != "" {
+		t.Fatalf("expected current file to be cleared, got %q", di.currentFile)
+	}
+}
+
+func TestDirInputOpenFileSeeksSavedOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	content := "line1\nline2\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	di := &dirInput{cfg: DirConfig{Dir: dir}, currentFile: path, offset: int64(len("line1\n"))}
+	if err := di.openFile(); err != nil {
+		t.Fatal(err)
+	}
+	defer di.currentF.Close()
+
+	line, n, err := di.readLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "line2" {
+		t.Fatalf("expected to resume at line2, got %q", line)
+	}
+	if n != len("line2\n") {
+		t.Fatalf("expected to consume %d bytes, got %d", len("line2\n"), n)
+	}
+}
+
+func TestDirInputDetectRotation(t *testing.T) {
+	t.Run("no current file", func(t *testing.T) {
+		if (&dirInput{}).detectRotation() {
+			t.Fatal("expected detectRotation to be false without an open file")
+		}
+	})
+
+	t.Run("unchanged file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "app.log")
+		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		di := openTestDirFile(t, path)
+		if di.detectRotation() {
+			t.Fatal("expected detectRotation to be false for unchanged file")
+		}
+	})
+
+	t.Run("file removed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "app.log")
+		if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		di := openTestDirFile(t, path)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if !di.detectRotation() {
+			t.Fatal("expected detectRotation to report removed file")
+		}
+	})
+
+	t.Run("inode changed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "app.log")
+		rotated := filepath.Join(dir, "app.log.1")
+		if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		di := openTestDirFile(t, path)
+		if err := os.Rename(path, rotated); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("line2\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if !di.detectRotation() {
+			t.Fatal("expected detectRotation to report inode replacement")
+		}
+	})
+
+	t.Run("file truncated", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "app.log")
+		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		di := openTestDirFile(t, path)
+		di.offset = int64(len("line1\nline2\n"))
+		if err := os.Truncate(path, int64(len("line1\n"))); err != nil {
+			t.Fatal(err)
+		}
+		if !di.detectRotation() {
+			t.Fatal("expected detectRotation to report truncation")
+		}
+	})
+}
+
+func TestDirInputUpdateLagTracksRemainingBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	content := "line1\nline2\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	di := &dirInput{currentF: f, offset: int64(len("line1\n"))}
+	di.updateLag()
+	if got := di.Lag(); got != int64(len("line2\n")) {
+		t.Fatalf("expected lag %d, got %d", len("line2\n"), got)
+	}
+
+	di.offset = int64(len(content) + 5)
+	di.updateLag()
+	if got := di.Lag(); got != 0 {
+		t.Fatalf("expected lag to clamp at 0, got %d", got)
+	}
+}
+
+func TestDirInputUpdateLagStatError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	di := &dirInput{currentF: f}
+	atomic.StoreInt64(&di.lag, 9)
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	di.updateLag()
+	if got := di.Lag(); got != 9 {
+		t.Fatalf("expected lag to remain unchanged after Stat error, got %d", got)
+	}
+}
+
+func TestDirInputCommitStateWritesPrunedState(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta", "state.json")
+	currentPath := filepath.Join(dir, "current.log")
+	stalePath := filepath.Join(dir, "stale.log")
+	if err := os.WriteFile(currentPath, []byte("current\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	currentInode, err := inodeFromPath(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleInode, err := inodeFromPath(stalePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stalePath); err != nil {
+		t.Fatal(err)
+	}
+
+	di := &dirInput{
+		cfg:         DirConfig{Dir: dir, MetaPath: metaPath},
+		currentFile: currentPath,
+		offset:      4,
+		doneInodes: map[string]int64{
+			strconv.FormatUint(currentInode, 10): 4,
+			strconv.FormatUint(staleInode, 10):   2,
+		},
+	}
+
+	di.commitState()
+
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state dirOffsetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentFile != currentPath {
+		t.Fatalf("expected current file %q, got %q", currentPath, state.CurrentFile)
+	}
+	if state.Offset != 4 {
+		t.Fatalf("expected offset 4, got %d", state.Offset)
+	}
+	if _, ok := state.DoneInodes[strconv.FormatUint(staleInode, 10)]; ok {
+		t.Fatal("expected stale inode to be pruned before commit")
+	}
+	if _, ok := state.DoneInodes[strconv.FormatUint(currentInode, 10)]; !ok {
+		t.Fatal("expected current inode to remain in committed state")
+	}
+}
+
+func TestDirInputCommitStateMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	di := &dirInput{cfg: DirConfig{Dir: dir, MetaPath: filepath.Join(blocker, "state.json")}}
+	di.commitState()
+
+	if _, err := os.Stat(filepath.Join(blocker, "state.json.tmp")); err == nil {
+		t.Fatal("expected no temp state file to be written")
+	}
+}
+
+func TestDirInputListFilesMissingDir(t *testing.T) {
+	di := &dirInput{cfg: DirConfig{Dir: filepath.Join(t.TempDir(), "missing")}}
+	if got := di.listFiles(); got != nil {
+		t.Fatalf("expected nil files for missing directory, got %v", got)
+	}
+}
+
+func TestDirInputListFilesSkipsDirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(logPath, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	di := &dirInput{cfg: DirConfig{Dir: dir}}
+	files := di.listFiles()
+	if len(files) != 1 || files[0] != logPath {
+		t.Fatalf("expected only %q, got %v", logPath, files)
+	}
+}
+
+func TestInodeFromPathMissingFile(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.log")
+	if got, err := inodeFromPath(missing); err == nil || got != 0 {
+		t.Fatalf("expected missing path to return error and inode 0, got inode=%d err=%v", got, err)
+	}
+}
+
+func TestGetInodeFromFileClosedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := getInodeFromFile(f); got != 0 {
+		t.Fatalf("expected closed file to return inode 0, got %d", got)
+	}
+}
+
+func TestDirInputPruneStaleInodesReadDirError(t *testing.T) {
+	di := &dirInput{
+		cfg: DirConfig{Dir: filepath.Join(t.TempDir(), "missing")},
+		doneInodes: map[string]int64{
+			"1": 1,
+		},
+	}
+
+	di.pruneStaleInodes()
+
+	if got := di.doneInodes["1"]; got != 1 {
+		t.Fatalf("expected doneInodes to remain unchanged on read error, got %v", di.doneInodes)
+	}
+}
+
+func openTestDirFile(t *testing.T, path string) *dirInput {
+	t.Helper()
+
+	di := &dirInput{cfg: DirConfig{Dir: filepath.Dir(path)}, currentFile: path}
+	if err := di.openFile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if di.currentF != nil {
+			_ = di.currentF.Close()
+		}
+	})
+	return di
+}
+
 type fakeFileInfo struct{}
 
 func (fakeFileInfo) Name() string       { return "fake" }
@@ -342,4 +704,4 @@ func (fakeFileInfo) Size() int64        { return 0 }
 func (fakeFileInfo) Mode() os.FileMode  { return 0 }
 func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Sys() interface{}   { return nil }
+func (fakeFileInfo) Sys() any           { return nil }

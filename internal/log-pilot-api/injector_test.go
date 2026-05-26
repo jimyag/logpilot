@@ -1,13 +1,19 @@
 package logpilotapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func makePolicy(labels map[string]string, containers []logpilotv1alpha1.ContainerPolicy) *logpilotv1alpha1.LogPilotPolicy {
@@ -51,6 +57,24 @@ func TestMatchesPolicyNilSelector(t *testing.T) {
 	pod := makePod(map[string]string{"app": "myapp"}, nil)
 	if matchesPolicy(pod, policy) {
 		t.Fatal("nil selector should not match any pod")
+	}
+}
+
+func TestMatchesPolicyInvalidSelector(t *testing.T) {
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      "app",
+					Operator: metav1.LabelSelectorOperator("bogus"),
+					Values:   []string{"myapp"},
+				}},
+			},
+		},
+	}
+
+	if matchesPolicy(makePod(map[string]string{"app": "myapp"}, nil), policy) {
+		t.Fatal("invalid selector should not match")
 	}
 }
 
@@ -146,6 +170,164 @@ func TestInjectPodBestEffortUsesEmptyDir(t *testing.T) {
 	}
 	if pod.Spec.Volumes[0].EmptyDir == nil {
 		t.Error("expected emptyDir volume for bestEffort delivery")
+	}
+}
+
+func TestInjectEnvVarsDeduplicatesExistingValues(t *testing.T) {
+	container := &corev1.Container{Env: []corev1.EnvVar{{Name: "POD_NAME", Value: "existing"}}}
+
+	injectEnvVars(container)
+
+	count := 0
+	for _, env := range container.Env {
+		if env.Name == "POD_NAME" {
+			count++
+			if env.Value != "existing" {
+				t.Fatalf("expected existing POD_NAME to be preserved, got %#v", env)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 POD_NAME env var, got %d", count)
+	}
+	if len(container.Env) != 3 {
+		t.Fatalf("expected all downward API vars to be present once, got %d", len(container.Env))
+	}
+}
+
+func TestInjectVolumeMountsSkipsDashAndExistingPaths(t *testing.T) {
+	container := &corev1.Container{VolumeMounts: []corev1.VolumeMount{{MountPath: "/app/logs"}}}
+	policies := []logpilotv1alpha1.ContainerPolicy{
+		{Name: "app", Path: "-", LogType: "stdout"},
+		{Name: "app", Path: "/app/logs", LogType: "existing"},
+		{Name: "app", Path: "/other", LogType: "access"},
+	}
+
+	injectVolumeMounts(container, policies)
+
+	if len(container.VolumeMounts) != 2 {
+		t.Fatalf("expected 2 volume mounts, got %d", len(container.VolumeMounts))
+	}
+	if container.VolumeMounts[1].MountPath != "/other" {
+		t.Fatalf("expected only /other mount to be added, got %#v", container.VolumeMounts)
+	}
+}
+
+func TestVolumeSubPathExprBestEffort(t *testing.T) {
+	cp := logpilotv1alpha1.ContainerPolicy{Name: "app", LogType: "access", Delivery: "bestEffort"}
+	if got := volumeSubPathExpr(cp); got != "app/access" {
+		t.Fatalf("expected app/access, got %q", got)
+	}
+}
+
+func TestEnsureLogVolumeReturnsWhenAlreadyPresent(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: logVolumeName}}}}
+
+	ensureLogVolume(pod, []logpilotv1alpha1.ContainerPolicy{{Delivery: "guaranteed"}})
+
+	if len(pod.Spec.Volumes) != 1 {
+		t.Fatalf("expected existing log volume to be reused, got %d volumes", len(pod.Spec.Volumes))
+	}
+}
+
+func TestInjectPodSkipsContainersWithoutMatchingContainerPolicy(t *testing.T) {
+	policy := makePolicy(map[string]string{"app": "myapp"}, []logpilotv1alpha1.ContainerPolicy{{
+		Name:     "sidecar",
+		LogType:  "applog",
+		Path:     "/app/logs",
+		Delivery: "guaranteed",
+	}})
+	pod := makePod(map[string]string{"app": "myapp"}, []corev1.Container{{Name: "app"}})
+
+	if err := injectPod(pod, []*logpilotv1alpha1.LogPilotPolicy{policy}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pod.Spec.Containers[0].Env) != 0 {
+		t.Fatalf("expected container env to remain unchanged, got %#v", pod.Spec.Containers[0].Env)
+	}
+	if len(pod.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Fatalf("expected container mounts to remain unchanged, got %#v", pod.Spec.Containers[0].VolumeMounts)
+	}
+	if _, ok := pod.Annotations[podLogPolicyAnnotation]; !ok {
+		t.Fatal("expected pod annotation to be added")
+	}
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != logVolumeName {
+		t.Fatalf("expected log volume to be added, got %#v", pod.Spec.Volumes)
+	}
+}
+
+func invalidJSONConfig() map[string]apiextensionsv1.JSON {
+	return map[string]apiextensionsv1.JSON{"path": {Raw: []byte("not-json")}}
+}
+
+func TestInjectPodReturnsMarshalError(t *testing.T) {
+	policy := makePolicy(map[string]string{"app": "myapp"}, []logpilotv1alpha1.ContainerPolicy{{
+		Name:     "app",
+		LogType:  "applog",
+		Path:     "/app/logs",
+		Delivery: "guaranteed",
+		Output: logpilotv1alpha1.OutputSpec{
+			Type:   "file",
+			Config: invalidJSONConfig(),
+		},
+	}})
+	pod := makePod(map[string]string{"app": "myapp"}, []corev1.Container{{Name: "app"}})
+
+	err := injectPod(pod, []*logpilotv1alpha1.LogPilotPolicy{policy})
+	if err == nil || !strings.Contains(err.Error(), "marshal container policies") {
+		t.Fatalf("expected marshal container policies error, got %v", err)
+	}
+}
+
+func TestMutatePodReturnsListError(t *testing.T) {
+	scheme := newTestScheme(t)
+	api := New(fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, ctrlclient.WithWatch, ctrlclient.ObjectList, ...ctrlclient.ListOption) error {
+			return errors.New("list failed")
+		},
+	}).Build(), scheme)
+
+	resp := api.mutatePod(newAdmissionReview(newTestPod(t, map[string]string{"app": "myapp"})))
+	if resp == nil || resp.Allowed {
+		t.Fatalf("expected list failure to reject request, got %+v", resp)
+	}
+	if resp.Result == nil || !strings.Contains(resp.Result.Message, "list failed") {
+		t.Fatalf("expected list error message, got %+v", resp.Result)
+	}
+}
+
+func TestMutatePodReturnsInjectionError(t *testing.T) {
+	scheme := newTestScheme(t)
+	badPolicy := logpilotv1alpha1.LogPilotPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "bad-policy", Namespace: "default"},
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "myapp"}},
+			Containers: []logpilotv1alpha1.ContainerPolicy{{
+				Name:     "app",
+				LogType:  "applog",
+				Path:     "/app/logs",
+				Delivery: "guaranteed",
+				Output: logpilotv1alpha1.OutputSpec{
+					Type:   "file",
+					Config: invalidJSONConfig(),
+				},
+			}},
+		},
+	}
+	api := New(fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(_ context.Context, _ ctrlclient.WithWatch, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+			policyList := list.(*logpilotv1alpha1.LogPilotPolicyList)
+			policyList.Items = []logpilotv1alpha1.LogPilotPolicy{badPolicy}
+			return nil
+		},
+	}).Build(), scheme)
+
+	resp := api.mutatePod(newAdmissionReview(newTestPod(t, map[string]string{"app": "myapp"})))
+	if resp == nil || resp.Allowed {
+		t.Fatalf("expected injection failure to reject request, got %+v", resp)
+	}
+	if resp.Result == nil || !strings.Contains(resp.Result.Message, "marshal container policies") {
+		t.Fatalf("expected marshal error message, got %+v", resp.Result)
 	}
 }
 

@@ -64,7 +64,7 @@ func (r *LogPilotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !lp.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !lp.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&lp, logPilotFinalizer) {
 			if err := cleanupLogPilot(ctx, r.Client, &lp); err != nil {
 				log.Error(err, "Failed to clean up LogPilot resources")

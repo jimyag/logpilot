@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 
 	kinds := map[string]bool{}
 	for _, record := range records {
-		var payload map[string]interface{}
+		var payload map[string]any
 		if err := json.Unmarshal(record.Data, &payload); err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +96,7 @@ func TestK8sObjectStateInputSnapshotsWorkloads(t *testing.T) {
 
 	kinds := map[string]bool{}
 	for _, record := range records {
-		var payload map[string]interface{}
+		var payload map[string]any
 		if err := json.Unmarshal(record.Data, &payload); err != nil {
 			t.Fatal(err)
 		}
@@ -185,6 +186,174 @@ func TestContainerStateFinished(t *testing.T) {
 	}
 }
 
+func TestK8sObjectStateEnqueueContextCancelled(t *testing.T) {
+	in := &k8sObjectStateInput{queue: make(chan Record)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := in.enqueue(ctx, "Pod", "Added", map[string]any{"name": "pod"}); err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+}
+
+func TestK8sObjectStateResources(t *testing.T) {
+	defaults := (&k8sObjectStateInput{}).resources()
+	if len(defaults) != 6 {
+		t.Fatalf("expected default resources, got %v", defaults)
+	}
+
+	custom := (&k8sObjectStateInput{cfg: K8sObjectStateConfig{Resources: []string{"pod"}}}).resources()
+	if len(custom) != 1 || custom[0] != "pod" {
+		t.Fatalf("expected custom resources, got %v", custom)
+	}
+}
+
+func TestK8sObjectStateNamespaces(t *testing.T) {
+	defaults := (&k8sObjectStateInput{}).namespaces()
+	if len(defaults) != 1 || defaults[0] != metav1.NamespaceAll {
+		t.Fatalf("expected default namespaces, got %v", defaults)
+	}
+
+	custom := (&k8sObjectStateInput{cfg: K8sObjectStateConfig{Namespaces: []string{"default"}}}).namespaces()
+	if len(custom) != 1 || custom[0] != "default" {
+		t.Fatalf("expected custom namespaces, got %v", custom)
+	}
+}
+
+func TestOptionalTime(t *testing.T) {
+	if got := optionalTime(nil); got != "" {
+		t.Fatalf("expected empty string for nil time, got %q", got)
+	}
+
+	zero := metav1.Time{}
+	if got := optionalTime(&zero); got != zero.Time.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("expected zero time to format consistently, got %q", got)
+	}
+
+	now := metav1.NewTime(time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC))
+	if got := optionalTime(&now); got != now.Time.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("expected non-zero time to be formatted, got %q", got)
+	}
+}
+
+func TestK8sObjectStateWatch(t *testing.T) {
+	t.Run("watch error", func(t *testing.T) {
+		in := &k8sObjectStateInput{}
+		called := false
+		in.watch(context.Background(), func() (watch.Interface, error) {
+			return nil, errors.New("boom")
+		}, func(context.Context, watch.Event) {
+			called = true
+		})
+		if called {
+			t.Fatal("expected handler not to be called when watch creation fails")
+		}
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		in := &k8sObjectStateInput{}
+		ctx, cancel := context.WithCancel(context.Background())
+		fw := watch.NewFake()
+		done := make(chan struct{})
+		go func() {
+			in.watch(ctx, func() (watch.Interface, error) { return fw, nil }, func(context.Context, watch.Event) {
+				t.Error("handler should not run after cancellation")
+			})
+			close(done)
+		}()
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("watch did not stop after context cancellation")
+		}
+	})
+
+	t.Run("event and close", func(t *testing.T) {
+		in := &k8sObjectStateInput{}
+		fw := watch.NewFake()
+		handled := make(chan watch.Event, 1)
+		done := make(chan struct{})
+		go func() {
+			in.watch(context.Background(), func() (watch.Interface, error) { return fw, nil }, func(_ context.Context, ev watch.Event) {
+				handled <- ev
+			})
+			close(done)
+		}()
+
+		fw.Add(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"}})
+		select {
+		case ev := <-handled:
+			if ev.Type != watch.Added {
+				t.Fatalf("expected Added event, got %s", ev.Type)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("expected watch event to be handled")
+		}
+
+		fw.Stop()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("watch did not stop after channel close")
+		}
+	})
+}
+
+func TestK8sObjectStateReadBatchReturnsPartialOnClosedQueue(t *testing.T) {
+	in := &k8sObjectStateInput{queue: make(chan Record, 1)}
+	in.queue <- Record{Data: []byte("one")}
+	close(in.queue)
+
+	batch, err := in.ReadBatch(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("expected partial batch of 1 record, got %d", len(batch))
+	}
+}
+
+func TestK8sObjectStateReadBatchCancelledContext(t *testing.T) {
+	in := &k8sObjectStateInput{queue: make(chan Record)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := 0; i < 256; i++ {
+		batch, err := in.ReadBatch(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) != 0 {
+			t.Fatalf("expected empty batch, got %v", batch)
+		}
+	}
+}
+
+func TestContainerState(t *testing.T) {
+	t.Run("waiting", func(t *testing.T) {
+		state := containerState(corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Pending", Message: "waiting"}})
+		if got := state["state"]; got != "waiting" {
+			t.Fatalf("expected waiting state, got %v", got)
+		}
+	})
+
+	t.Run("running", func(t *testing.T) {
+		startedAt := metav1.NewTime(time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC))
+		state := containerState(corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: startedAt}})
+		if got := state["state"]; got != "running" {
+			t.Fatalf("expected running state, got %v", got)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		if got := containerState(corev1.ContainerState{}); got != nil {
+			t.Fatalf("expected nil state, got %v", got)
+		}
+	})
+}
+
 func assertHandleObjectEnqueues(t *testing.T, obj runtime.Object, wantKind string) {
 	t.Helper()
 
@@ -200,7 +369,7 @@ func assertHandleObjectEnqueues(t *testing.T, obj runtime.Object, wantKind strin
 			t.Fatalf("expected action %q, got %q", watch.Added, got)
 		}
 
-		var payload map[string]interface{}
+		var payload map[string]any
 		if err := json.Unmarshal(record.Data, &payload); err != nil {
 			t.Fatal(err)
 		}
@@ -208,7 +377,7 @@ func assertHandleObjectEnqueues(t *testing.T, obj runtime.Object, wantKind strin
 			t.Fatalf("expected payload kind %q, got %v", wantKind, got)
 		}
 		if got := payload["action"]; got != string(watch.Added) {
-			t.Fatalf("expected payload action %q, got %v", watch.Added, got)
+			t.Fatalf("expected payload action %q", watch.Added)
 		}
 	default:
 		t.Fatalf("expected %s record to be enqueued", wantKind)

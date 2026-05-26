@@ -39,7 +39,7 @@ func TestFileOutput(t *testing.T) {
 	}
 
 	// Verify two JSON lines were written.
-	var line1 map[string]interface{}
+	var line1 map[string]any
 	lines := splitLines(data)
 	if len(lines) < 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
@@ -56,7 +56,7 @@ func TestFileOutput(t *testing.T) {
 }
 
 func TestHTTPOutput(t *testing.T) {
-	var received []map[string]interface{}
+	var received []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			http.Error(w, err.Error(), 400)

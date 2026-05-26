@@ -453,7 +453,7 @@ func (w *Watcher) acquireClusterPolicyLease(ctx context.Context, policyName stri
 	holder := w.cfg.NodeName
 
 	// Retry up to 3 times to handle optimistic-concurrency conflicts (409).
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		now := metav1.MicroTime{Time: time.Now()}
 
 		lease := &coordinationv1.Lease{}

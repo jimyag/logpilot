@@ -9,10 +9,16 @@ import (
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func makeLogPilot(name, ns string) *logpilotv1alpha1.LogPilot {
@@ -33,6 +39,11 @@ func newOperatorScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("add logpilot scheme: %v", err)
 	}
 	return s
+}
+
+func newControllerScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	return newOperatorScheme(t)
 }
 
 func TestBuildAPIDeploymentDefaults(t *testing.T) {
@@ -410,5 +421,197 @@ func TestCleanupLogPilotDeletesManagedObjects(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected %T %s to be deleted", obj, client.ObjectKeyFromObject(obj))
 		}
+	}
+}
+
+func TestLogPilotReconcilerNotFound(t *testing.T) {
+	s := newControllerScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	r := &LogPilotReconciler{Client: c, Scheme: s}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "notexist", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil err: %v", err)
+	}
+	if res.Requeue {
+		t.Error("unexpected requeue")
+	}
+}
+
+func TestLogPilotReconcilerAddFinalizer(t *testing.T) {
+	s := newControllerScheme(t)
+	lp := makeLogPilot("my-lp", "default")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(lp).Build()
+	r := &LogPilotReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil err: %v", err)
+	}
+
+	updated := &logpilotv1alpha1.LogPilot{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "my-lp", Namespace: "default"}, updated); err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(updated, logPilotFinalizer) {
+		t.Error("expected finalizer to be added")
+	}
+}
+
+func TestLogPilotReconcilerFullReconcile(t *testing.T) {
+	s := newControllerScheme(t)
+	lp := makeLogPilot("my-lp", "default")
+	lp.TypeMeta = metav1.TypeMeta{APIVersion: logpilotv1alpha1.GroupVersion.String(), Kind: "LogPilot"}
+	controllerutil.AddFinalizer(lp, logPilotFinalizer)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(lp).Build()
+	r := &LogPilotReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil err: %v", err)
+	}
+
+	deploy := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: apiName, Namespace: lp.Namespace}, deploy); err != nil {
+		t.Fatalf("expected deployment: %v", err)
+	}
+	if len(deploy.OwnerReferences) == 0 || deploy.OwnerReferences[0].Name != lp.Name {
+		t.Fatalf("expected deployment owner reference to %q", lp.Name)
+	}
+
+	ds := &appsv1.DaemonSet{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: agentName, Namespace: lp.Namespace}, ds); err != nil {
+		t.Fatalf("expected daemonset: %v", err)
+	}
+	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != lp.Name {
+		t.Fatalf("expected daemonset owner reference to %q", lp.Name)
+	}
+}
+
+func TestLogPilotReconcilerDeletion(t *testing.T) {
+	s := newControllerScheme(t)
+	lp := makeLogPilot("my-lp", "default")
+	lp.TypeMeta = metav1.TypeMeta{APIVersion: logpilotv1alpha1.GroupVersion.String(), Kind: "LogPilot"}
+	controllerutil.AddFinalizer(lp, logPilotFinalizer)
+	now := metav1.Now()
+	lp.DeletionTimestamp = &now
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(lp).Build()
+	r := &LogPilotReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil err: %v", err)
+	}
+
+	updated := &logpilotv1alpha1.LogPilot{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "my-lp", Namespace: "default"}, updated); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get failed: %v", err)
+	}
+	if controllerutil.ContainsFinalizer(updated, logPilotFinalizer) {
+		t.Error("expected finalizer to be removed")
+	}
+}
+
+func TestLogPilotPolicyReconcilerNotFound(t *testing.T) {
+	s := newControllerScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	r := &LogPilotPolicyReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "notexist", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil: %v", err)
+	}
+}
+
+func TestLogPilotPolicyReconcilerValid(t *testing.T) {
+	s := newControllerScheme(t)
+	output := fileOutputSpec()
+	policy := &logpilotv1alpha1.LogPilotPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default", Generation: 1},
+		Spec: logpilotv1alpha1.LogPilotPolicySpec{
+			Input:  &logpilotv1alpha1.InputSpec{Type: "file"},
+			Output: &output,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&logpilotv1alpha1.LogPilotPolicy{}).
+		WithObjects(policy).
+		Build()
+	r := &LogPilotPolicyReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "p1", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil: %v", err)
+	}
+
+	updated := &logpilotv1alpha1.LogPilotPolicy{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "p1", Namespace: "default"}, updated); err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	condition := meta.FindStatusCondition(updated.Status.Conditions, conditionAccepted)
+	if condition == nil || condition.Status != metav1.ConditionTrue {
+		t.Fatalf("expected accepted condition true, got %+v", condition)
+	}
+}
+
+func TestClusterLogPilotPolicyReconcilerNotFound(t *testing.T) {
+	s := newControllerScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	r := &ClusterLogPilotPolicyReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "notexist"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil: %v", err)
+	}
+}
+
+func TestClusterLogPilotPolicyReconcilerValid(t *testing.T) {
+	s := newControllerScheme(t)
+	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cp1", Generation: 1},
+		Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
+			Input:  logpilotv1alpha1.InputSpec{Type: "k8sEvent"},
+			Output: fileOutputSpec(),
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&logpilotv1alpha1.ClusterLogPilotPolicy{}).
+		WithObjects(policy).
+		Build()
+	r := &ClusterLogPilotPolicyReconciler{Client: c, Scheme: s}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cp1"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil: %v", err)
+	}
+
+	updated := &logpilotv1alpha1.ClusterLogPilotPolicy{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "cp1"}, updated); err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	condition := meta.FindStatusCondition(updated.Status.Conditions, conditionAccepted)
+	if condition == nil || condition.Status != metav1.ConditionTrue {
+		t.Fatalf("expected accepted condition true, got %+v", condition)
 	}
 }
