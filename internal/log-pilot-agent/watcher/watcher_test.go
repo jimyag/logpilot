@@ -1314,15 +1314,15 @@ func waitRunnerDone(t *testing.T, done <-chan struct{}) {
 }
 
 type blockingInput struct {
+	startOnce sync.Once
 	started   chan struct{}
 	cancelled bool
 }
 
 func (in *blockingInput) ReadBatch(ctx context.Context, _ int) ([]input.Record, error) {
-	if in.started != nil {
+	in.startOnce.Do(func() {
 		close(in.started)
-		in.started = nil
-	}
+	})
 	if in.cancelled {
 		return nil, nil
 	}

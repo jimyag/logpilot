@@ -324,6 +324,14 @@ func TestFileInputReadBatchAfterCloseReturnsNil(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
+
+	// Drain existing content so the tail goroutine reaches a stable inotify-wait
+	// state (not mid-seek), avoiding a race between commitOffset/Tell and the
+	// tail goroutine's concurrent file seeks during initial read.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	_, _ = fi.ReadBatch(drainCtx, 10)
+	drainCancel()
+
 	if err := fi.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -377,6 +385,17 @@ func TestFileInputReadBatchSkipsFilteredLines(t *testing.T) {
 	}
 }
 
+// drainFileInput reads available content with a short timeout to ensure the
+// nxadm/tail goroutine has completed its initial file seek and reached a
+// stable inotify-wait state. This prevents a race between commitOffset/Tell
+// and the tail goroutine's concurrent file seeks during initial read.
+func drainFileInput(t *testing.T, fi *fileInput) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _ = fi.ReadBatch(ctx, 1024)
+}
+
 func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
@@ -391,6 +410,7 @@ func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
 	fi := in.(*fileInput)
 	defer func() { _ = fi.Close() }()
 
+	drainFileInput(t, fi)
 	fi.commitOffset()
 
 	entries, err := os.ReadDir(dir)
@@ -420,6 +440,7 @@ func TestFileInputCommitOffsetMkdirAllError(t *testing.T) {
 	fi := in.(*fileInput)
 	defer func() { _ = fi.Close() }()
 
+	drainFileInput(t, fi)
 	fi.commitOffset()
 
 	if _, err := os.Stat(filepath.Join(blocker, "app.offset.tmp")); err == nil {
@@ -445,6 +466,7 @@ func TestFileInputCommitOffsetWriteFileError(t *testing.T) {
 	fi := in.(*fileInput)
 	defer func() { _ = fi.Close() }()
 
+	drainFileInput(t, fi)
 	fi.commitOffset()
 
 	if _, err := os.Stat(metaPath); err == nil {
@@ -480,6 +502,7 @@ func TestFileInputCommitOffsetAfterClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi := in.(*fileInput)
+	drainFileInput(t, fi)
 	if err := fi.Close(); err != nil {
 		t.Fatal(err)
 	}
