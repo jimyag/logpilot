@@ -1,3 +1,6 @@
+// Package watcher provides tests for the log pilot watcher.
+//
+//lint:file-ignore SA1019 NewSimpleClientset is required until WithApplyConfig codegen is available
 package watcher
 
 import (

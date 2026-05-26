@@ -1,3 +1,6 @@
+// Package input provides tests for log input implementations.
+//
+//lint:file-ignore SA1019 NewSimpleClientset is required until WithApplyConfig codegen is available
 package input
 
 import (

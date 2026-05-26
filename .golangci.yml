@@ -33,6 +33,7 @@ linters:
         - name: comment-spacings
           arguments:
             - nolint
+            - lint
         - name: import-shadowing
     modernize:
       disable:
