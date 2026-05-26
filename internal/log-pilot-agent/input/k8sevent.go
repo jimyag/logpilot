@@ -201,11 +201,11 @@ func (k *k8sEventInput) Commit() error {
 	if k.cfg.ResourceVersionPath == "" || resourceVersion == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(k.cfg.ResourceVersionPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(k.cfg.ResourceVersionPath), 0o755); err != nil {
 		return err
 	}
 	tmp := k.cfg.ResourceVersionPath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(resourceVersion), 0644); err != nil {
+	if err := os.WriteFile(tmp, []byte(resourceVersion), 0o644); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, k.cfg.ResourceVersionPath); err != nil {

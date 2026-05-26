@@ -387,7 +387,7 @@ func TestK8sEventCommitEmptyPath(t *testing.T) {
 
 func TestK8sEventCommitMkdirAllError(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -402,7 +402,7 @@ func TestK8sEventCommitMkdirAllError(t *testing.T) {
 func TestK8sEventCommitWriteFileError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.rv")
-	if err := os.Mkdir(path+".tmp", 0755); err != nil {
+	if err := os.Mkdir(path+".tmp", 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -417,7 +417,7 @@ func TestK8sEventCommitWriteFileError(t *testing.T) {
 func TestK8sEventCommitRenameError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.rv")
-	if err := os.Mkdir(path, 0755); err != nil {
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -531,7 +531,7 @@ func TestLoadResourceVersionEmptyMissingAndSuccess(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "events.rv")
-	if err := os.WriteFile(path, []byte("21"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("21"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadResourceVersion(path); got != "21" {

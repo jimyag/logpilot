@@ -54,7 +54,7 @@ func TestFileInputReadsLines(t *testing.T) {
 func TestFileInputIncludeFilter(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/app.log"
-	if err := os.WriteFile(path, []byte("hello\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,7 +79,7 @@ func TestFileInputIncludeFilter(t *testing.T) {
 func TestFileInputExcludeFilter(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/app.pid"
-	if err := os.WriteFile(path, []byte("12345\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("12345\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,7 +107,7 @@ func TestFileInputOffsetRecovery(t *testing.T) {
 	metaDir := t.TempDir()
 
 	// Write 3 lines.
-	if err := os.WriteFile(logFile, []byte("line1\nline2\nline3\n"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestFileInputOffsetRecovery(t *testing.T) {
 	in1.Close() // forces final commitOffset
 
 	// Append a new line after the first session ends.
-	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("line4\n")
 	f.Close()
 
@@ -176,7 +176,7 @@ func TestLoadOffsetFileNotExist(t *testing.T) {
 
 func TestLoadOffsetInvalidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "invalid.offset")
-	if err := os.WriteFile(path, []byte("not-json"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("not-json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,7 +187,7 @@ func TestLoadOffsetInvalidJSON(t *testing.T) {
 
 func TestLoadOffsetSuccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.offset")
-	if err := os.WriteFile(path, []byte(`{"offset":42}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"offset":42}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -200,7 +200,7 @@ func TestFileInputLag(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
 	content := []byte("line1\nline2\n")
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -240,7 +240,7 @@ func TestFileInputLag(t *testing.T) {
 func TestFileInputCommitWritesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +315,7 @@ func TestFileInputPassesFilterBothIncludeAndExclude(t *testing.T) {
 func TestFileInputReadBatchAfterCloseReturnsNil(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -380,7 +380,7 @@ func TestFileInputReadBatchSkipsFilteredLines(t *testing.T) {
 func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -405,11 +405,11 @@ func TestFileInputCommitOffsetNoMetaPath(t *testing.T) {
 func TestFileInputCommitOffsetMkdirAllError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	blocker := filepath.Join(dir, "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -430,11 +430,11 @@ func TestFileInputCommitOffsetMkdirAllError(t *testing.T) {
 func TestFileInputCommitOffsetWriteFileError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	metaPath := filepath.Join(dir, "app.offset")
-	if err := os.Mkdir(metaPath+".tmp", 0755); err != nil {
+	if err := os.Mkdir(metaPath+".tmp", 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -471,7 +471,7 @@ func TestFileInputReadBatchCancelledContext(t *testing.T) {
 func TestFileInputCommitOffsetAfterClose(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

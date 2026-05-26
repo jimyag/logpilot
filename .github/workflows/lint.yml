@@ -1,7 +1,11 @@
 name: Lint
 
 on:
-  workflow_dispatch:  # 暂时禁用
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   lint:

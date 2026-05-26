@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
 
 func makePolicy(labels map[string]string, containers []logpilotv1alpha1.ContainerPolicy) *logpilotv1alpha1.LogPilotPolicy {

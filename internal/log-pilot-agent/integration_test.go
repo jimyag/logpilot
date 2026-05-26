@@ -32,7 +32,7 @@ func TestPipelineEndToEnd(t *testing.T) {
 	content := `{"level":"INFO","msg":"hello"}` + "\n" +
 		`{"level":"DEBUG","msg":"debug line"}` + "\n" +
 		`{"level":"WARN","msg":"warn line"}` + "\n"
-	if err := os.WriteFile(logFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestPipelineOffsetRecovery(t *testing.T) {
 	metaDir := t.TempDir()
 
 	// Write initial content.
-	if err := os.WriteFile(logFile, []byte("line1\nline2\n"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,7 +139,7 @@ func TestPipelineOffsetRecovery(t *testing.T) {
 	runPipeline(outFile)
 
 	// Append line3.
-	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("line3\n")
 	f.Close()
 

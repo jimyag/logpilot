@@ -15,7 +15,7 @@ import (
 // For bestEffort: creates a symlink to the kubelet emptyDir path.
 // For stdout ("-"): creates a symlink to the K8s native stdout path.
 func ensureLogPath(pod *corev1.Pod, cp logpilotv1alpha1.ContainerPolicy, logPath string) error {
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("create parent dirs for %s: %w", logPath, err)
 	}
 
@@ -36,7 +36,7 @@ func ensureLogPath(pod *corev1.Pod, cp logpilotv1alpha1.ContainerPolicy, logPath
 
 	default:
 		// guaranteed/hostPath: VolumeMount already directs writes here.
-		return os.MkdirAll(logPath, 0755)
+		return os.MkdirAll(logPath, 0o755)
 	}
 }
 

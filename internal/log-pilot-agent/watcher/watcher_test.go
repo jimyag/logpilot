@@ -89,7 +89,7 @@ func TestBuildRunnerWithTransforms(t *testing.T) {
 
 	// Seed log file so FileInput can open it.
 	logFile := filepath.Join(logPath, "app.log")
-	if err := os.WriteFile(logFile, []byte(`{"msg":"hello"}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte(`{"msg":"hello"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,7 +284,7 @@ func TestWatcherCleanup(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir()})
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
 	podLogDir := w.PodLogDir(pod)
-	if err := os.MkdirAll(podLogDir, 0755); err != nil {
+	if err := os.MkdirAll(podLogDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -450,7 +450,7 @@ func TestOnPodAddBuildRunnerFailureReturnsNotReady(t *testing.T) {
 
 func TestOnPodAddEnsureLogPathFailureReturnsNotReady(t *testing.T) {
 	logDir := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(logDir, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(logDir, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	policy := logpilotv1alpha1.ContainerPolicy{

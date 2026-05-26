@@ -21,7 +21,7 @@ func NewFileOutput(path string) Output {
 
 func (o *fileOutput) WriteBatch(_ context.Context, records []input.Record) error {
 	if o.f == nil {
-		f, err := os.OpenFile(o.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(o.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
 		}

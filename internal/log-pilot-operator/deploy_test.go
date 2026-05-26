@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
 
 func makeLogPilot(name, ns string) *logpilotv1alpha1.LogPilot {

@@ -14,9 +14,9 @@ import (
 func TestDirInputReadsFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Write two files.
-	os.WriteFile(filepath.Join(dir, "a.log"), []byte("line1\nline2\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "a.log"), []byte("line1\nline2\n"), 0o644)
 	time.Sleep(5 * time.Millisecond) // ensure different mod times
-	os.WriteFile(filepath.Join(dir, "b.log"), []byte("line3\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.log"), []byte("line3\n"), 0o644)
 
 	in, err := NewDirInput(DirConfig{
 		Dir:               dir,
@@ -53,8 +53,8 @@ func TestDirInputReadsFiles(t *testing.T) {
 
 func TestDirInputFilterExclude(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "app.log"), []byte("hello\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "app.pid"), []byte("12345\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "app.log"), []byte("hello\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "app.pid"), []byte("12345\n"), 0o644)
 
 	in, err := NewDirInput(DirConfig{
 		Dir:      dir,
@@ -82,7 +82,7 @@ func TestDirInputLogRotation(t *testing.T) {
 	logFile := filepath.Join(dir, "app.log")
 
 	// Write initial content.
-	os.WriteFile(logFile, []byte("line1\nline2\n"), 0644)
+	os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644)
 
 	in, err := NewDirInput(DirConfig{Dir: dir, ReadFrom: "oldest"})
 	if err != nil {
@@ -105,7 +105,7 @@ func TestDirInputLogRotation(t *testing.T) {
 
 	// Simulate log rotation: rename app.log → app.log.1, create new app.log.
 	os.Rename(logFile, filepath.Join(dir, "app.log.1"))
-	os.WriteFile(logFile, []byte("line3\n"), 0644)
+	os.WriteFile(logFile, []byte("line3\n"), 0o644)
 
 	// Should eventually read line3 from the new app.log.
 	for len(records) < 3 {
@@ -126,7 +126,7 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 	logFile := filepath.Join(dir, "app.log")
 	metaPath := filepath.Join(metaDir, "state.json")
 
-	os.WriteFile(logFile, []byte("line1\nline2\n"), 0644)
+	os.WriteFile(logFile, []byte("line1\nline2\n"), 0o644)
 
 	// First session: read all lines.
 	in1, _ := NewDirInput(DirConfig{
@@ -145,7 +145,7 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 	cancel1()
 
 	// Append new line.
-	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("line3\n")
 	f.Close()
 
@@ -179,7 +179,7 @@ func TestDirInputOffsetRecovery(t *testing.T) {
 
 func TestDirInputLagInitial(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,7 +197,7 @@ func TestDirInputLagInitial(t *testing.T) {
 func TestDirInputCommit(t *testing.T) {
 	dir := t.TempDir()
 	metaPath := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -276,7 +276,7 @@ func TestDirInputUpdateLagNilCurrentF(t *testing.T) {
 
 func TestGetInodeFromStat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -297,10 +297,10 @@ func TestDirInputPruneStaleInodesRemovesMissing(t *testing.T) {
 	dir := t.TempDir()
 	currentPath := filepath.Join(dir, "current.log")
 	stalePath := filepath.Join(dir, "stale.log")
-	if err := os.WriteFile(currentPath, []byte("current\n"), 0644); err != nil {
+	if err := os.WriteFile(currentPath, []byte("current\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stalePath, []byte("stale\n"), 0644); err != nil {
+	if err := os.WriteFile(stalePath, []byte("stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -361,7 +361,7 @@ func TestDirInputOpenFileNewestStartsAtEnd(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
 	content := "line1\nline2\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -399,7 +399,7 @@ func TestDirInputOpenFileSeeksSavedOffset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
 	content := "line1\nline2\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -431,7 +431,7 @@ func TestDirInputDetectRotation(t *testing.T) {
 	t.Run("unchanged file", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "app.log")
-		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -444,7 +444,7 @@ func TestDirInputDetectRotation(t *testing.T) {
 	t.Run("file removed", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "app.log")
-		if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -461,7 +461,7 @@ func TestDirInputDetectRotation(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "app.log")
 		rotated := filepath.Join(dir, "app.log.1")
-		if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -469,7 +469,7 @@ func TestDirInputDetectRotation(t *testing.T) {
 		if err := os.Rename(path, rotated); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("line2\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("line2\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if !di.detectRotation() {
@@ -480,7 +480,7 @@ func TestDirInputDetectRotation(t *testing.T) {
 	t.Run("file truncated", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "app.log")
-		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("line1\nline2\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -499,7 +499,7 @@ func TestDirInputUpdateLagTracksRemainingBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
 	content := "line1\nline2\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -525,7 +525,7 @@ func TestDirInputUpdateLagTracksRemainingBytes(t *testing.T) {
 func TestDirInputUpdateLagStatError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -550,10 +550,10 @@ func TestDirInputCommitStateWritesPrunedState(t *testing.T) {
 	metaPath := filepath.Join(dir, "meta", "state.json")
 	currentPath := filepath.Join(dir, "current.log")
 	stalePath := filepath.Join(dir, "stale.log")
-	if err := os.WriteFile(currentPath, []byte("current\n"), 0644); err != nil {
+	if err := os.WriteFile(currentPath, []byte("current\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stalePath, []byte("stale\n"), 0644); err != nil {
+	if err := os.WriteFile(stalePath, []byte("stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -606,7 +606,7 @@ func TestDirInputCommitStateWritesPrunedState(t *testing.T) {
 func TestDirInputCommitStateMkdirAllError(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -627,11 +627,11 @@ func TestDirInputListFilesMissingDir(t *testing.T) {
 
 func TestDirInputListFilesSkipsDirectories(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "nested"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(logPath, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(logPath, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -651,7 +651,7 @@ func TestInodeFromPathMissingFile(t *testing.T) {
 
 func TestGetInodeFromFileClosedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("line1\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

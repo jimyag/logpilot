@@ -12,7 +12,7 @@ import (
 func TestAfterCollectedShouldClean(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
-	if err := os.WriteFile(logFile, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,7 +31,7 @@ func TestAfterCollectedShouldClean(t *testing.T) {
 func TestAfterCollectedCleanRemovesFiles(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"a.log", "b.log"} {
-		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644)
+		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644)
 	}
 
 	c := NewFromSpec(logpilotv1alpha1.CleanSpec{Strategy: "afterCollected"}, dir)
@@ -64,7 +64,7 @@ func TestNeverClean(t *testing.T) {
 func TestRetainCleanRetainDays0DefaultsTo7(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
-	os.WriteFile(logFile, []byte("data"), 0644)
+	os.WriteFile(logFile, []byte("data"), 0o644)
 
 	// retainDays=0 should default to 7 days (safe default), so a just-created
 	// file should NOT be cleaned.
@@ -83,7 +83,7 @@ func TestRetainCleanRetainDays0DefaultsTo7(t *testing.T) {
 func TestRetainCleanFutureRetain(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
-	os.WriteFile(logFile, []byte("data"), 0644)
+	os.WriteFile(logFile, []byte("data"), 0o644)
 
 	// retainDays=30 means keep files modified within last 30 days.
 	spec := logpilotv1alpha1.CleanSpec{Strategy: "retain", RetainDays: 30}
@@ -111,7 +111,7 @@ func TestNewFromSpecDefaultsToAfterCollected(t *testing.T) {
 
 func TestAfterCollectedShouldCleanLagPositive(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestRetainCleanCleanDeletesOldFiles(t *testing.T) {
 	dir := t.TempDir()
 	oldFiles := []string{"old-1.log", "old-2.log"}
 	for _, name := range append(oldFiles, "new.log") {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -172,7 +172,7 @@ func TestRetainCleanCleanDeletesOldFiles(t *testing.T) {
 func TestRetainCleanShouldCleanWithOldFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "old.log")
-	if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

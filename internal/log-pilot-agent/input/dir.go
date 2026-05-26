@@ -402,7 +402,7 @@ func (d *dirInput) commitState() {
 	if d.cfg.MetaPath == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(d.cfg.MetaPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(d.cfg.MetaPath), 0o755); err != nil {
 		return
 	}
 	state := dirOffsetState{
@@ -415,7 +415,7 @@ func (d *dirInput) commitState() {
 		return
 	}
 	tmp := d.cfg.MetaPath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0644); err != nil {
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return
 	}
 	_ = os.Rename(tmp, d.cfg.MetaPath) // atomic on POSIX

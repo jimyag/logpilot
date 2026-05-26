@@ -60,7 +60,7 @@ func TestForceSymlinkOverwrites(t *testing.T) {
 
 func TestRemoveLogPathExisting(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 

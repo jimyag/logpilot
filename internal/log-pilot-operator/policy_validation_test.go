@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
 
 func jsonValue(raw string) apiextensionsv1.JSON {
