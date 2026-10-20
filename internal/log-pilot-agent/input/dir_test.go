@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -281,7 +280,7 @@ func TestDirPassesFilterBothIncludeExclude(t *testing.T) {
 
 func TestDirInputUpdateLagNilCurrentF(t *testing.T) {
 	di := &dirInput{}
-	atomic.StoreInt64(&di.lag, 17)
+	di.lag.Store(17)
 
 	di.updateLag()
 
@@ -354,7 +353,7 @@ func TestDirInputPruneStaleInodesRemovesMissing(t *testing.T) {
 
 func TestDirInputReadBatchStopped(t *testing.T) {
 	di := &dirInput{}
-	atomic.StoreInt32(&di.stopped, 1)
+	di.stopped.Store(1)
 
 	batch, err := di.ReadBatch(context.Background(), 5)
 	if err != nil {
@@ -550,7 +549,7 @@ func TestDirInputUpdateLagStatError(t *testing.T) {
 		t.Fatal(err)
 	}
 	di := &dirInput{currentF: f}
-	atomic.StoreInt64(&di.lag, 9)
+	di.lag.Store(9)
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}

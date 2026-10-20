@@ -32,11 +32,9 @@ func newTestPod(t *testing.T, labels map[string]string) []byte {
 	t.Helper()
 
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			Labels:    labels,
-		},
+		Name:      "test",
+		Namespace: "default",
+		Labels:    labels,
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{Name: "app"}},
 		},
@@ -126,7 +124,7 @@ func TestMutatePodInvalidJSON(t *testing.T) {
 func TestMutatePodNoPolicyMatch(t *testing.T) {
 	scheme := newTestScheme(t)
 	policy := &logpilotv1alpha1.LogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "default"},
+		Name: "other", Namespace: "default",
 		Spec: logpilotv1alpha1.LogPilotPolicySpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "other"}},
 			Containers: []logpilotv1alpha1.ContainerPolicy{{
@@ -153,7 +151,7 @@ func TestMutatePodNoPolicyMatch(t *testing.T) {
 func TestMutatePodWithMatchingPolicy(t *testing.T) {
 	scheme := newTestScheme(t)
 	policy := &logpilotv1alpha1.LogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "match", Namespace: "default"},
+		Name: "match", Namespace: "default",
 		Spec: logpilotv1alpha1.LogPilotPolicySpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "myapp"}},
 			Containers: []logpilotv1alpha1.ContainerPolicy{{

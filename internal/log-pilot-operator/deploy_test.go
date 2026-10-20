@@ -431,7 +431,7 @@ func TestLogPilotReconcilerNotFound(t *testing.T) {
 	r := &LogPilotReconciler{Client: c, Scheme: s}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "notexist", Namespace: "default"},
+		Name: "notexist", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil err: %v", err)
@@ -448,7 +448,7 @@ func TestLogPilotReconcilerAddFinalizer(t *testing.T) {
 	r := &LogPilotReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+		Name: "my-lp", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil err: %v", err)
@@ -472,7 +472,7 @@ func TestLogPilotReconcilerFullReconcile(t *testing.T) {
 	r := &LogPilotReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+		Name: "my-lp", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil err: %v", err)
@@ -506,7 +506,7 @@ func TestLogPilotReconcilerDeletion(t *testing.T) {
 	r := &LogPilotReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "my-lp", Namespace: "default"},
+		Name: "my-lp", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil err: %v", err)
@@ -530,7 +530,7 @@ func TestLogPilotPolicyReconcilerNotFound(t *testing.T) {
 	r := &LogPilotPolicyReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "notexist", Namespace: "default"},
+		Name: "notexist", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil: %v", err)
@@ -541,7 +541,7 @@ func TestLogPilotPolicyReconcilerValid(t *testing.T) {
 	s := newControllerScheme(t)
 	output := fileOutputSpec()
 	policy := &logpilotv1alpha1.LogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default", Generation: 1},
+		Name: "p1", Namespace: "default", Generation: 1,
 		Spec: logpilotv1alpha1.LogPilotPolicySpec{
 			Input:  &logpilotv1alpha1.InputSpec{Type: "file"},
 			Output: &output,
@@ -555,7 +555,7 @@ func TestLogPilotPolicyReconcilerValid(t *testing.T) {
 	r := &LogPilotPolicyReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "p1", Namespace: "default"},
+		Name: "p1", Namespace: "default",
 	})
 	if err != nil {
 		t.Fatalf("expected nil: %v", err)
@@ -577,7 +577,7 @@ func TestClusterLogPilotPolicyReconcilerNotFound(t *testing.T) {
 	r := &ClusterLogPilotPolicyReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "notexist"},
+		Name: "notexist",
 	})
 	if err != nil {
 		t.Fatalf("expected nil: %v", err)
@@ -587,7 +587,7 @@ func TestClusterLogPilotPolicyReconcilerNotFound(t *testing.T) {
 func TestClusterLogPilotPolicyReconcilerValid(t *testing.T) {
 	s := newControllerScheme(t)
 	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "cp1", Generation: 1},
+		Name: "cp1", Generation: 1,
 		Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
 			Input:  logpilotv1alpha1.InputSpec{Type: "k8sEvent"},
 			Output: fileOutputSpec(),
@@ -601,7 +601,7 @@ func TestClusterLogPilotPolicyReconcilerValid(t *testing.T) {
 	r := &ClusterLogPilotPolicyReconciler{Client: c, Scheme: s}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "cp1"},
+		Name: "cp1",
 	})
 	if err != nil {
 		t.Fatalf("expected nil: %v", err)

@@ -14,6 +14,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+const (
+	fieldState              = "state"
+	fieldMetadata           = "metadata"
+	fieldReason             = "reason"
+	fieldMessage            = "message"
+	fieldConditions         = "conditions"
+	fieldObservedGeneration = "observedGeneration"
+)
+
 // K8sObjectStateConfig configures Kubernetes object state collection.
 type K8sObjectStateConfig struct {
 	// Namespaces to watch for namespaced resources. Empty means all namespaces.
@@ -26,7 +35,7 @@ type k8sObjectStateInput struct {
 	cfg    K8sObjectStateConfig
 	client kubernetes.Interface
 	queue  chan Record
-	lag    int64
+	lag    atomic.Int64
 	cancel context.CancelFunc
 }
 
@@ -243,7 +252,7 @@ func (k *k8sObjectStateInput) enqueue(ctx context.Context, kind, action string, 
 	}
 	select {
 	case k.queue <- Record{Data: raw, Meta: map[string]string{"kind": kind, "action": action}}:
-		atomic.AddInt64(&k.lag, 1)
+		k.lag.Add(1)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -259,7 +268,7 @@ func (k *k8sObjectStateInput) ReadBatch(ctx context.Context, size int) ([]Record
 				return records, nil
 			}
 			records = append(records, r)
-			atomic.AddInt64(&k.lag, -1)
+			k.lag.Add(-1)
 		case <-ctx.Done():
 			return records, nil
 		default:
@@ -270,7 +279,7 @@ func (k *k8sObjectStateInput) ReadBatch(ctx context.Context, size int) ([]Record
 }
 
 func (k *k8sObjectStateInput) Commit() error { return nil }
-func (k *k8sObjectStateInput) Lag() int64    { return atomic.LoadInt64(&k.lag) }
+func (k *k8sObjectStateInput) Lag() int64    { return k.lag.Load() }
 func (k *k8sObjectStateInput) Close() error {
 	k.cancel()
 	return nil
@@ -295,17 +304,17 @@ func podState(pod *corev1.Pod) map[string]any {
 			"name":         status.Name,
 			"ready":        status.Ready,
 			"restartCount": status.RestartCount,
-			"state":        containerState(status.State),
+			fieldState:     containerState(status.State),
 			"lastState":    containerState(status.LastTerminationState),
 		})
 	}
 	return map[string]any{
-		"metadata":          metadataState(pod),
+		fieldMetadata:       metadataState(pod),
 		"nodeName":          pod.Spec.NodeName,
 		"phase":             string(pod.Status.Phase),
-		"reason":            pod.Status.Reason,
-		"message":           pod.Status.Message,
-		"conditions":        pod.Status.Conditions,
+		fieldReason:         pod.Status.Reason,
+		fieldMessage:        pod.Status.Message,
+		fieldConditions:     pod.Status.Conditions,
 		"containerStatuses": containers,
 	}
 }
@@ -313,14 +322,14 @@ func podState(pod *corev1.Pod) map[string]any {
 func containerState(state corev1.ContainerState) map[string]any {
 	switch {
 	case state.Waiting != nil:
-		return map[string]any{"state": "waiting", "reason": state.Waiting.Reason, "message": state.Waiting.Message}
+		return map[string]any{fieldState: "waiting", fieldReason: state.Waiting.Reason, fieldMessage: state.Waiting.Message}
 	case state.Running != nil:
-		return map[string]any{"state": "running", "startedAt": state.Running.StartedAt.Time.UTC().Format(time.RFC3339Nano)}
+		return map[string]any{fieldState: "running", "startedAt": state.Running.StartedAt.Time.UTC().Format(time.RFC3339Nano)}
 	case state.Terminated != nil:
 		return map[string]any{
-			"state":      "terminated",
-			"reason":     state.Terminated.Reason,
-			"message":    state.Terminated.Message,
+			fieldState:   "terminated",
+			fieldReason:  state.Terminated.Reason,
+			fieldMessage: state.Terminated.Message,
 			"exitCode":   state.Terminated.ExitCode,
 			"startedAt":  state.Terminated.StartedAt.Time.UTC().Format(time.RFC3339Nano),
 			"finishedAt": state.Terminated.FinishedAt.Time.UTC().Format(time.RFC3339Nano),
@@ -332,63 +341,63 @@ func containerState(state corev1.ContainerState) map[string]any {
 
 func nodeState(node *corev1.Node) map[string]any {
 	return map[string]any{
-		"metadata":    metadataState(node),
-		"conditions":  node.Status.Conditions,
-		"capacity":    node.Status.Capacity,
-		"allocatable": node.Status.Allocatable,
+		fieldMetadata:   metadataState(node),
+		fieldConditions: node.Status.Conditions,
+		"capacity":      node.Status.Capacity,
+		"allocatable":   node.Status.Allocatable,
 	}
 }
 
 func deploymentState(deployment *appsv1.Deployment) map[string]any {
 	return map[string]any{
-		"metadata":            metadataState(deployment),
-		"replicas":            deployment.Status.Replicas,
-		"readyReplicas":       deployment.Status.ReadyReplicas,
-		"availableReplicas":   deployment.Status.AvailableReplicas,
-		"updatedReplicas":     deployment.Status.UpdatedReplicas,
-		"unavailableReplicas": deployment.Status.UnavailableReplicas,
-		"observedGeneration":  deployment.Status.ObservedGeneration,
-		"conditions":          deployment.Status.Conditions,
+		fieldMetadata:           metadataState(deployment),
+		"replicas":              deployment.Status.Replicas,
+		"readyReplicas":         deployment.Status.ReadyReplicas,
+		"availableReplicas":     deployment.Status.AvailableReplicas,
+		"updatedReplicas":       deployment.Status.UpdatedReplicas,
+		"unavailableReplicas":   deployment.Status.UnavailableReplicas,
+		fieldObservedGeneration: deployment.Status.ObservedGeneration,
+		fieldConditions:         deployment.Status.Conditions,
 	}
 }
 
 func statefulSetState(statefulSet *appsv1.StatefulSet) map[string]any {
 	return map[string]any{
-		"metadata":           metadataState(statefulSet),
-		"replicas":           statefulSet.Status.Replicas,
-		"readyReplicas":      statefulSet.Status.ReadyReplicas,
-		"availableReplicas":  statefulSet.Status.AvailableReplicas,
-		"updatedReplicas":    statefulSet.Status.UpdatedReplicas,
-		"currentReplicas":    statefulSet.Status.CurrentReplicas,
-		"observedGeneration": statefulSet.Status.ObservedGeneration,
-		"conditions":         statefulSet.Status.Conditions,
+		fieldMetadata:           metadataState(statefulSet),
+		"replicas":              statefulSet.Status.Replicas,
+		"readyReplicas":         statefulSet.Status.ReadyReplicas,
+		"availableReplicas":     statefulSet.Status.AvailableReplicas,
+		"updatedReplicas":       statefulSet.Status.UpdatedReplicas,
+		"currentReplicas":       statefulSet.Status.CurrentReplicas,
+		fieldObservedGeneration: statefulSet.Status.ObservedGeneration,
+		fieldConditions:         statefulSet.Status.Conditions,
 	}
 }
 
 func daemonSetState(daemonSet *appsv1.DaemonSet) map[string]any {
 	return map[string]any{
-		"metadata":               metadataState(daemonSet),
+		fieldMetadata:            metadataState(daemonSet),
 		"desiredNumberScheduled": daemonSet.Status.DesiredNumberScheduled,
 		"currentNumberScheduled": daemonSet.Status.CurrentNumberScheduled,
 		"numberReady":            daemonSet.Status.NumberReady,
 		"updatedNumberScheduled": daemonSet.Status.UpdatedNumberScheduled,
 		"numberAvailable":        daemonSet.Status.NumberAvailable,
 		"numberUnavailable":      daemonSet.Status.NumberUnavailable,
-		"observedGeneration":     daemonSet.Status.ObservedGeneration,
-		"conditions":             daemonSet.Status.Conditions,
+		fieldObservedGeneration:  daemonSet.Status.ObservedGeneration,
+		fieldConditions:          daemonSet.Status.Conditions,
 	}
 }
 
 func jobState(job *batchv1.Job) map[string]any {
 	return map[string]any{
-		"metadata":         metadataState(job),
+		fieldMetadata:      metadataState(job),
 		"active":           job.Status.Active,
 		"succeeded":        job.Status.Succeeded,
 		"failed":           job.Status.Failed,
 		"ready":            job.Status.Ready,
 		"completedIndexes": job.Status.CompletedIndexes,
 		"failedIndexes":    job.Status.FailedIndexes,
-		"conditions":       job.Status.Conditions,
+		fieldConditions:    job.Status.Conditions,
 		"startTime":        optionalTime(job.Status.StartTime),
 		"completionTime":   optionalTime(job.Status.CompletionTime),
 	}

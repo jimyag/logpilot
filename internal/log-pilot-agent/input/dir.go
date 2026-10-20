@@ -46,8 +46,8 @@ type dirInput struct {
 	doneInodes   map[string]int64
 	includeRe    []interface{ MatchString(string) bool }
 	excludeRe    []interface{ MatchString(string) bool }
-	stopped      int32 // atomic
-	lag          int64 // atomic
+	stopped      atomic.Int32 // atomic
+	lag          atomic.Int64 // atomic
 	readCount    int
 }
 
@@ -75,7 +75,7 @@ func NewDirInput(cfg DirConfig) (Input, error) {
 }
 
 func (d *dirInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
-	if atomic.LoadInt32(&d.stopped) > 0 {
+	if d.stopped.Load() > 0 {
 		return nil, nil
 	}
 
@@ -115,7 +115,7 @@ func (d *dirInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 	return records, nil
 }
 
-func (d *dirInput) Lag() int64 { return atomic.LoadInt64(&d.lag) }
+func (d *dirInput) Lag() int64 { return d.lag.Load() }
 
 func (d *dirInput) Commit() error {
 	d.commitState()
@@ -123,7 +123,7 @@ func (d *dirInput) Commit() error {
 }
 
 func (d *dirInput) Close() error {
-	atomic.StoreInt32(&d.stopped, 1)
+	d.stopped.Store(1)
 	d.commitState()
 	if d.currentF != nil {
 		err := d.currentF.Close()
@@ -392,7 +392,7 @@ func (d *dirInput) updateLag() {
 		return
 	}
 	remaining := max(info.Size()-d.offset, 0)
-	atomic.StoreInt64(&d.lag, remaining)
+	d.lag.Store(remaining)
 }
 
 // commitState atomically writes current read state to MetaPath.

@@ -52,8 +52,8 @@ type FileConfig struct {
 type fileInput struct {
 	cfg       FileConfig
 	tail      *tail.Tail
-	stopped   int32 // atomic
-	lag       int64 // atomic, approximate bytes remaining
+	stopped   atomic.Int32 // atomic
+	lag       atomic.Int64 // atomic, approximate bytes remaining
 	readCount int
 	includeRe []*regexp.Regexp
 	excludeRe []*regexp.Regexp
@@ -109,14 +109,14 @@ func NewFileInput(cfg FileConfig, metaDir string) (Input, error) {
 			startOffset = 0
 		}
 		lag := max(info.Size()-startOffset, 0)
-		atomic.StoreInt64(&fi.lag, lag)
+		fi.lag.Store(lag)
 	}
 
 	return fi, nil
 }
 
 func (f *fileInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
-	if atomic.LoadInt32(&f.stopped) > 0 {
+	if f.stopped.Load() > 0 {
 		return nil, nil
 	}
 
@@ -159,7 +159,7 @@ func (f *fileInput) ReadBatch(ctx context.Context, size int) ([]Record, error) {
 	return records, nil
 }
 
-func (f *fileInput) Lag() int64 { return atomic.LoadInt64(&f.lag) }
+func (f *fileInput) Lag() int64 { return f.lag.Load() }
 
 func (f *fileInput) Commit() error {
 	f.commitOffset()
@@ -167,7 +167,7 @@ func (f *fileInput) Commit() error {
 }
 
 func (f *fileInput) Close() error {
-	atomic.StoreInt32(&f.stopped, 1)
+	f.stopped.Store(1)
 	f.commitOffset()
 	return f.tail.Stop()
 }
@@ -181,7 +181,7 @@ func (f *fileInput) commitOffset() {
 	// Update in-memory lag.
 	if info, err := os.Stat(f.cfg.Path); err == nil {
 		remaining := max(info.Size()-pos, 0)
-		atomic.StoreInt64(&f.lag, remaining)
+		f.lag.Store(remaining)
 	}
 
 	// Atomically persist offset to MetaPath (write tmp then rename).

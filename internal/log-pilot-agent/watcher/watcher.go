@@ -460,7 +460,7 @@ func (w *Watcher) acquireClusterPolicyLease(ctx context.Context, policyName stri
 		err := w.client.Get(ctx, client.ObjectKey{Namespace: w.cfg.Namespace, Name: name}, lease)
 		if apierrors.IsNotFound(err) {
 			lease = &coordinationv1.Lease{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: w.cfg.Namespace},
+				Name: name, Namespace: w.cfg.Namespace,
 				Spec: coordinationv1.LeaseSpec{
 					HolderIdentity:       &holder,
 					LeaseDurationSeconds: &duration,

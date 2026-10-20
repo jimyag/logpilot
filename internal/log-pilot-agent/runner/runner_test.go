@@ -16,13 +16,13 @@ import (
 // mockInput returns a fixed set of records, then blocks.
 type mockInput struct {
 	records []input.Record
-	pos     int32
+	pos     atomic.Int32
 	lag     int64
-	commits int64
+	commits atomic.Int64
 }
 
 func (m *mockInput) ReadBatch(ctx context.Context, size int) ([]input.Record, error) {
-	pos := int(atomic.LoadInt32(&m.pos))
+	pos := int(m.pos.Load())
 	if pos >= len(m.records) {
 		select {
 		case <-ctx.Done():
@@ -33,14 +33,14 @@ func (m *mockInput) ReadBatch(ctx context.Context, size int) ([]input.Record, er
 	}
 	end := min(pos+size, len(m.records))
 	batch := m.records[pos:end]
-	atomic.StoreInt32(&m.pos, int32(end))
+	m.pos.Store(int32(end))
 	atomic.StoreInt64(&m.lag, int64(len(m.records)-end))
 	return batch, nil
 }
 
 func (m *mockInput) Lag() int64 { return atomic.LoadInt64(&m.lag) }
 func (m *mockInput) Commit() error {
-	atomic.AddInt64(&m.commits, 1)
+	m.commits.Add(1)
 	return nil
 }
 func (m *mockInput) Close() error { return nil }
@@ -73,10 +73,10 @@ func (f *flakyOutput) WriteBatch(_ context.Context, records []input.Record) erro
 
 func (f *flakyOutput) Close() error { return nil }
 
-type alwaysFailOutput struct{ attempts int64 }
+type alwaysFailOutput struct{ attempts atomic.Int64 }
 
 func (a *alwaysFailOutput) WriteBatch(_ context.Context, _ []input.Record) error {
-	atomic.AddInt64(&a.attempts, 1)
+	a.attempts.Add(1)
 	return errors.New("permanent output failure")
 }
 
@@ -84,13 +84,13 @@ func (a *alwaysFailOutput) Close() error { return nil }
 
 type timeoutOnDrainInput struct {
 	records  []input.Record
-	pos      int32
-	commits  int64
+	pos      atomic.Int32
+	commits  atomic.Int64
 	lagValue int64
 }
 
 func (t *timeoutOnDrainInput) ReadBatch(ctx context.Context, _ int) ([]input.Record, error) {
-	if atomic.CompareAndSwapInt32(&t.pos, 0, 1) {
+	if t.pos.CompareAndSwap(0, 1) {
 		atomic.StoreInt64(&t.lagValue, 0)
 		return t.records, nil
 	}
@@ -100,7 +100,7 @@ func (t *timeoutOnDrainInput) ReadBatch(ctx context.Context, _ int) ([]input.Rec
 
 func (t *timeoutOnDrainInput) Lag() int64 { return atomic.LoadInt64(&t.lagValue) }
 func (t *timeoutOnDrainInput) Commit() error {
-	atomic.AddInt64(&t.commits, 1)
+	t.commits.Add(1)
 	return nil
 }
 func (t *timeoutOnDrainInput) Close() error { return nil }
@@ -206,7 +206,7 @@ func TestRunnerRetriesOutputBeforeCommit(t *testing.T) {
 	if len(out.received) != 1 {
 		t.Fatalf("expected record after retry, got %d", len(out.received))
 	}
-	if atomic.LoadInt64(&in.commits) == 0 {
+	if in.commits.Load() == 0 {
 		t.Fatal("expected input commit after successful output")
 	}
 }
@@ -274,8 +274,8 @@ func TestRunnerApplyTransformsError(t *testing.T) {
 	if len(out.received) != 0 {
 		t.Fatalf("expected records to be dropped, got %d delivered", len(out.received))
 	}
-	if atomic.LoadInt64(&in.commits) != 0 {
-		t.Fatalf("expected no commit when transform fails, got %d", atomic.LoadInt64(&in.commits))
+	if in.commits.Load() != 0 {
+		t.Fatalf("expected no commit when transform fails, got %d", in.commits.Load())
 	}
 }
 
@@ -302,8 +302,8 @@ func TestRunnerApplyTransformsEmpty(t *testing.T) {
 	if len(out.received) != 0 {
 		t.Fatalf("expected records to be dropped, got %d delivered", len(out.received))
 	}
-	if atomic.LoadInt64(&in.commits) != 0 {
-		t.Fatalf("expected no commit when transform returns no records, got %d", atomic.LoadInt64(&in.commits))
+	if in.commits.Load() != 0 {
+		t.Fatalf("expected no commit when transform returns no records, got %d", in.commits.Load())
 	}
 }
 
@@ -411,13 +411,13 @@ func TestRunnerRunStopsWhenWriteBatchFails(t *testing.T) {
 	defer cancel()
 	r.Run(ctx)
 
-	if got := atomic.LoadInt64(&in.commits); got != 0 {
+	if got := in.commits.Load(); got != 0 {
 		t.Fatalf("expected no commits when output never succeeds, got %d", got)
 	}
 	if got := r.Sent(); got != 0 {
 		t.Fatalf("expected Sent to remain 0, got %d", got)
 	}
-	if got := atomic.LoadInt64(&out.attempts); got == 0 {
+	if got := out.attempts.Load(); got == 0 {
 		t.Fatal("expected output write attempts")
 	}
 }
@@ -434,7 +434,7 @@ func TestRunnerShutdownSkipsCleanWhenDrainWriteFails(t *testing.T) {
 	if cleaner.cleaned {
 		t.Fatal("expected Clean not to be called when drain write fails")
 	}
-	if got := atomic.LoadInt64(&in.commits); got != 0 {
+	if got := in.commits.Load(); got != 0 {
 		t.Fatalf("expected no commits when drain write fails, got %d", got)
 	}
 	if got := r.Sent(); got != 0 {
@@ -457,7 +457,7 @@ func TestRunnerShutdownSkipsCleanWhenDrainTimesOut(t *testing.T) {
 	if len(out.received) != 1 {
 		t.Fatalf("expected drained batch to be written before timeout, got %d records", len(out.received))
 	}
-	if got := atomic.LoadInt64(&in.commits); got != 1 {
+	if got := in.commits.Load(); got != 1 {
 		t.Fatalf("expected one commit before drain timeout, got %d", got)
 	}
 	if got := r.Sent(); got != 1 {

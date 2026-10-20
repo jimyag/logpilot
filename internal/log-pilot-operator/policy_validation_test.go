@@ -338,7 +338,7 @@ func TestAcceptedConditionFalse(t *testing.T) {
 }
 
 func TestSetLogPilotPolicyCondition(t *testing.T) {
-	policy := &logpilotv1alpha1.LogPilotPolicy{ObjectMeta: metav1.ObjectMeta{Generation: 3}}
+	policy := &logpilotv1alpha1.LogPilotPolicy{Generation: 3}
 
 	setLogPilotPolicyCondition(policy, true, "ok")
 
@@ -352,7 +352,7 @@ func TestSetLogPilotPolicyCondition(t *testing.T) {
 }
 
 func TestSetClusterLogPilotPolicyCondition(t *testing.T) {
-	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{ObjectMeta: metav1.ObjectMeta{Generation: 5}}
+	policy := &logpilotv1alpha1.ClusterLogPilotPolicy{Generation: 5}
 
 	setClusterLogPilotPolicyCondition(policy, false, "invalid")
 

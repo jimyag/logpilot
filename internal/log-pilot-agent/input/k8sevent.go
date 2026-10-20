@@ -29,7 +29,7 @@ type k8sEventInput struct {
 	cfg    K8sEventConfig
 	client kubernetes.Interface
 	queue  chan Record
-	lag    int64
+	lag    atomic.Int64
 	cancel context.CancelFunc
 	mu     sync.Mutex
 
@@ -164,7 +164,7 @@ func (k *k8sEventInput) enqueue(ctx context.Context, ev corev1.Event) error {
 		Data: raw,
 		Meta: map[string]string{"resourceVersion": ev.ResourceVersion},
 	}:
-		atomic.AddInt64(&k.lag, 1)
+		k.lag.Add(1)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -183,7 +183,7 @@ func (k *k8sEventInput) ReadBatch(ctx context.Context, size int) ([]Record, erro
 			if r.Meta != nil && r.Meta["resourceVersion"] != "" {
 				k.setReadResourceVersion(r.Meta["resourceVersion"])
 			}
-			atomic.AddInt64(&k.lag, -1)
+			k.lag.Add(-1)
 		case <-ctx.Done():
 			return records, nil
 		default:
@@ -214,7 +214,7 @@ func (k *k8sEventInput) Commit() error {
 	return nil
 }
 
-func (k *k8sEventInput) Lag() int64 { return atomic.LoadInt64(&k.lag) }
+func (k *k8sEventInput) Lag() int64 { return k.lag.Load() }
 
 func (k *k8sEventInput) Close() error {
 	k.cancel()

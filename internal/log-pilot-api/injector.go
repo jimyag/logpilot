@@ -141,18 +141,14 @@ func ensureLogVolume(pod *corev1.Pod, policies []logpilotv1alpha1.ContainerPolic
 	for _, cp := range policies {
 		if cp.Delivery != "bestEffort" {
 			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-				Name: logVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{Path: logHostPath},
-				},
+				Name:     logVolumeName,
+				HostPath: &corev1.HostPathVolumeSource{Path: logHostPath},
 			})
 			return
 		}
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-		Name: logVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{},
-		},
+		Name:     logVolumeName,
+		EmptyDir: &corev1.EmptyDirVolumeSource{},
 	})
 }

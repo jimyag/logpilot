@@ -23,6 +23,15 @@ const (
 	webhookPort      = int32(8443)
 	agentKubeletPath = "/var/lib/kubelet"
 	agentPodLogsPath = "/var/log/pods"
+	labelName        = "app.kubernetes.io/name"
+	labelComponent   = "app.kubernetes.io/component"
+	verbCreate       = "create"
+	verbGet          = "get"
+	verbList         = "list"
+	verbWatch        = "watch"
+	verbUpdate       = "update"
+	verbPatch        = "patch"
+	verbDelete       = "delete"
 )
 
 func buildAPIDeployment(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Deployment {
@@ -31,14 +40,12 @@ func buildAPIDeployment(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Dep
 		replicas = 2
 	}
 	labels := map[string]string{
-		"app.kubernetes.io/name":      "log-pilot-api",
-		"app.kubernetes.io/component": "webhook",
+		labelName:      "log-pilot-api",
+		labelComponent: "webhook",
 	}
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "log-pilot-api",
-			Namespace: lp.Namespace,
-		},
+		Name:      "log-pilot-api",
+		Namespace: lp.Namespace,
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
@@ -73,16 +80,14 @@ func buildAgentDaemonSet(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Da
 	}
 
 	labels := map[string]string{
-		"app.kubernetes.io/name":      "log-pilot-agent",
-		"app.kubernetes.io/component": "agent",
+		labelName:      "log-pilot-agent",
+		labelComponent: "agent",
 	}
 	hostPathType := corev1.HostPathDirectoryOrCreate
 
 	return &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "log-pilot-agent",
-			Namespace: lp.Namespace,
-		},
+		Name:      "log-pilot-agent",
+		Namespace: lp.Namespace,
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
@@ -90,8 +95,8 @@ func buildAgentDaemonSet(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Da
 				Spec: corev1.PodSpec{
 					ServiceAccountName: agentName,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsUser:  ptrInt64(0),
-						RunAsGroup: ptrInt64(0),
+						RunAsUser:  new(int64(0)),
+						RunAsGroup: new(int64(0)),
 					},
 					Containers: []corev1.Container{{
 						Name:      agentName,
@@ -124,38 +129,30 @@ func buildAgentDaemonSet(lp *logpilotv1alpha1.LogPilot, image string) *appsv1.Da
 					Volumes: []corev1.Volume{
 						{
 							Name: "log-dir",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: logDir,
-									Type: &hostPathType,
-								},
+							HostPath: &corev1.HostPathVolumeSource{
+								Path: logDir,
+								Type: &hostPathType,
 							},
 						},
 						{
 							Name: "meta-dir",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: metaDir,
-									Type: &hostPathType,
-								},
+							HostPath: &corev1.HostPathVolumeSource{
+								Path: metaDir,
+								Type: &hostPathType,
 							},
 						},
 						{
 							Name: "pod-logs",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: agentPodLogsPath,
-									Type: &hostPathType,
-								},
+							HostPath: &corev1.HostPathVolumeSource{
+								Path: agentPodLogsPath,
+								Type: &hostPathType,
 							},
 						},
 						{
 							Name: "kubelet",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: agentKubeletPath,
-									Type: &hostPathType,
-								},
+							HostPath: &corev1.HostPathVolumeSource{
+								Path: agentKubeletPath,
+								Type: &hostPathType,
 							},
 						},
 					},
@@ -185,16 +182,16 @@ func buildManagedObjects(lp *logpilotv1alpha1.LogPilot, apiImage, agentImage str
 }
 
 func buildServiceAccount(lp *logpilotv1alpha1.LogPilot, name string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: lp.Namespace}}
+	return &corev1.ServiceAccount{Name: name, Namespace: lp.Namespace}
 }
 
 func buildAPIService(lp *logpilotv1alpha1.LogPilot) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: apiName, Namespace: lp.Namespace},
+		Name: apiName, Namespace: lp.Namespace,
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app.kubernetes.io/name":      apiName,
-				"app.kubernetes.io/component": "webhook",
+				labelName:      apiName,
+				labelComponent: "webhook",
 			},
 			Ports: []corev1.ServicePort{{
 				Name:       "https",
@@ -207,42 +204,42 @@ func buildAPIService(lp *logpilotv1alpha1.LogPilot) *corev1.Service {
 
 func buildAPIClusterRole(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + apiName},
+		Name: lp.Namespace + "-" + apiName,
 		Rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{""}, Resources: []string{"secrets", "configmaps", "events"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
-			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
-			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"logpilotpolicies"}, Verbs: []string{"get", "list", "watch"}},
-			{APIGroups: []string{"admissionregistration.k8s.io"}, Resources: []string{"mutatingwebhookconfigurations"}, Verbs: []string{"get", "list", "watch", "update", "patch"}},
+			{APIGroups: []string{""}, Resources: []string{"secrets", "configmaps", "events"}, Verbs: []string{verbGet, verbList, verbWatch, verbCreate, verbUpdate, verbPatch, verbDelete}},
+			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{verbGet, verbList, verbWatch, verbCreate, verbUpdate, verbPatch, verbDelete}},
+			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"logpilotpolicies"}, Verbs: []string{verbGet, verbList, verbWatch}},
+			{APIGroups: []string{"admissionregistration.k8s.io"}, Resources: []string{"mutatingwebhookconfigurations"}, Verbs: []string{verbGet, verbList, verbWatch, verbUpdate, verbPatch}},
 		},
 	}
 }
 
 func buildAPIClusterRoleBinding(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + apiName},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: lp.Namespace + "-" + apiName},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: apiName, Namespace: lp.Namespace}},
+		Name:     lp.Namespace + "-" + apiName,
+		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: lp.Namespace + "-" + apiName},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: apiName, Namespace: lp.Namespace}},
 	}
 }
 
 func buildAgentClusterRole(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + agentName},
+		Name: lp.Namespace + "-" + agentName,
 		Rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{""}, Resources: []string{"pods", "nodes", "events"}, Verbs: []string{"get", "list", "watch"}},
-			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets", "daemonsets"}, Verbs: []string{"get", "list", "watch"}},
-			{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"get", "list", "watch"}},
-			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch"}},
-			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"clusterlogpilotpolicies"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{""}, Resources: []string{"pods", "nodes", "events"}, Verbs: []string{verbGet, verbList, verbWatch}},
+			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets", "daemonsets"}, Verbs: []string{verbGet, verbList, verbWatch}},
+			{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{verbGet, verbList, verbWatch}},
+			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{verbGet, verbList, verbWatch, verbCreate, verbUpdate, verbPatch}},
+			{APIGroups: []string{"logpilot.logpilot.jimyag.com"}, Resources: []string{"clusterlogpilotpolicies"}, Verbs: []string{verbGet, verbList, verbWatch}},
 		},
 	}
 }
 
 func buildAgentClusterRoleBinding(lp *logpilotv1alpha1.LogPilot) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: lp.Namespace + "-" + agentName},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: lp.Namespace + "-" + agentName},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: agentName, Namespace: lp.Namespace}},
+		Name:     lp.Namespace + "-" + agentName,
+		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: lp.Namespace + "-" + agentName},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: agentName, Namespace: lp.Namespace}},
 	}
 }
 
@@ -252,7 +249,7 @@ func buildMutatingWebhook(lp *logpilotv1alpha1.LogPilot) *admissionv1.MutatingWe
 	path := webhookPath
 	port := webhookPort
 	return &admissionv1.MutatingWebhookConfiguration{
-		ObjectMeta: metav1.ObjectMeta{Name: webhookName},
+		Name: webhookName,
 		Webhooks: []admissionv1.MutatingWebhook{{
 			Name:                    "pods.logpilot.jimyag.com",
 			AdmissionReviewVersions: []string{"v1"},
@@ -267,12 +264,10 @@ func buildMutatingWebhook(lp *logpilotv1alpha1.LogPilot) *admissionv1.MutatingWe
 				},
 			},
 			Rules: []admissionv1.RuleWithOperations{{
-				Operations: []admissionv1.OperationType{admissionv1.Create},
-				Rule: admissionv1.Rule{
-					APIGroups:   []string{""},
-					APIVersions: []string{"v1"},
-					Resources:   []string{"pods"},
-				},
+				Operations:  []admissionv1.OperationType{admissionv1.Create},
+				APIGroups:   []string{""},
+				APIVersions: []string{"v1"},
+				Resources:   []string{"pods"},
 			}},
 		}},
 	}
@@ -326,11 +321,6 @@ func preserveImmutableAndRuntimeFields(existing, desired client.Object) {
 			}
 		}
 	}
-}
-
-//go:fix inline
-func ptrInt64(v int64) *int64 {
-	return new(v)
 }
 
 func intstrFromInt(v int) intstr.IntOrString {

@@ -22,12 +22,10 @@ import (
 
 func TestK8sEventInputListsAndCommitsResourceVersion(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Event{ //nolint:staticcheck
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "started",
-			Namespace:       "default",
-			ResourceVersion: "10",
-		},
-		Reason: "Started",
+		Name:            "started",
+		Namespace:       "default",
+		ResourceVersion: "10",
+		Reason:          "Started",
 	})
 	metaPath := filepath.Join(t.TempDir(), "events.rv")
 	in := NewK8sEventInput(K8sEventConfig{
@@ -63,11 +61,9 @@ func TestK8sEventInputWatchesNewEvents(t *testing.T) {
 	defer func() { _ = in.Close() }()
 
 	_, err := client.CoreV1().Events("default").Create(context.Background(), &corev1.Event{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "created",
-			Namespace: "default",
-		},
-		Reason: "Created",
+		Name:      "created",
+		Namespace: "default",
+		Reason:    "Created",
 	}, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +143,7 @@ func TestConsumeWatchErrorEvent(t *testing.T) {
 	}()
 
 	fw.Error(&metav1.Status{Status: metav1.StatusFailure, Message: "boom"})
-	fw.Delete(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "deleted", ResourceVersion: "99"}})
+	fw.Delete(&corev1.Event{Name: "deleted", ResourceVersion: "99"})
 	fw.Stop()
 
 	select {
@@ -208,7 +204,7 @@ func TestK8sEventRunNamespaceRetriesAfterListError(t *testing.T) {
 		if listCalls == 1 {
 			return true, nil, errors.New("boom")
 		}
-		return true, &corev1.EventList{ListMeta: metav1.ListMeta{ResourceVersion: "5"}}, nil
+		return true, &corev1.EventList{ResourceVersion: "5"}, nil
 	})
 	client.PrependWatchReactor("events", func(action clientgotesting.Action) (bool, watch.Interface, error) {
 		fw := watch.NewFake()
@@ -241,9 +237,9 @@ func TestK8sEventListNamespaceResumeSkipsEnqueue(t *testing.T) {
 
 	client.PrependReactor("list", "events", func(action clientgotesting.Action) (bool, runtime.Object, error) {
 		return true, &corev1.EventList{
-			ListMeta: metav1.ListMeta{ResourceVersion: "456"},
+			ResourceVersion: "456",
 			Items: []corev1.Event{{
-				ObjectMeta: metav1.ObjectMeta{Name: "resumed", Namespace: "default", ResourceVersion: "789"},
+				Name: "resumed", Namespace: "default", ResourceVersion: "789",
 			}},
 		}, nil
 	})
@@ -271,10 +267,10 @@ func TestK8sEventListNamespaceResourceExpiredFallsBack(t *testing.T) {
 			return true, nil, apierrors.NewResourceExpired("expired")
 		}
 		return true, &corev1.EventList{
-			ListMeta: metav1.ListMeta{ResourceVersion: "456"},
+			ResourceVersion: "456",
 			Items: []corev1.Event{{
-				ObjectMeta: metav1.ObjectMeta{Name: "fresh", Namespace: "default", ResourceVersion: "457"},
-				Reason:     "Started",
+				Name: "fresh", Namespace: "default", ResourceVersion: "457",
+				Reason: "Started",
 			}},
 		}, nil
 	})
@@ -303,8 +299,8 @@ func TestK8sEventConsumeWatchSkipsDeletedAndNonEvent(t *testing.T) {
 		close(done)
 	}()
 
-	fw.Delete(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "deleted", ResourceVersion: "9"}})
-	fw.Add(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"}})
+	fw.Delete(&corev1.Event{Name: "deleted", ResourceVersion: "9"})
+	fw.Add(&corev1.Pod{Name: "pod", Namespace: "default"})
 	fw.Stop()
 
 	select {
@@ -452,7 +448,7 @@ func TestK8sEventListNamespaceReturnsEnqueueError(t *testing.T) {
 	cancel()
 
 	client.PrependReactor("list", "events", func(action clientgotesting.Action) (bool, runtime.Object, error) {
-		return true, &corev1.EventList{Items: []corev1.Event{{ObjectMeta: metav1.ObjectMeta{Name: "event", ResourceVersion: "7"}}}}, nil
+		return true, &corev1.EventList{Items: []corev1.Event{{Name: "event", ResourceVersion: "7"}}}, nil
 	})
 
 	if err := in.listNamespace(ctx, "default"); err == nil {
@@ -470,7 +466,7 @@ func TestK8sEventConsumeWatchEnqueuesEvent(t *testing.T) {
 		close(done)
 	}()
 
-	fw.Add(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "created", ResourceVersion: "11"}})
+	fw.Add(&corev1.Event{Name: "created", ResourceVersion: "11"})
 	fw.Stop()
 
 	select {

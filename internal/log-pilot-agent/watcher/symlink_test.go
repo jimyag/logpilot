@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	logpilotv1alpha1 "github.com/jimyag/logpilot/api/v1alpha1"
 )
@@ -81,7 +80,7 @@ func TestRemoveLogPathNotExist(t *testing.T) {
 func TestEnsureLogPathStdout(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "logs", "app", "applog")
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "uid"}}
+	pod := &corev1.Pod{Name: "test", Namespace: "default", UID: "uid"}
 	cp := logpilotv1alpha1.ContainerPolicy{Name: "app", LogType: "applog", Path: "-"}
 
 	if err := ensureLogPath(pod, cp, logPath); err != nil {
@@ -108,7 +107,7 @@ func TestEnsureLogPathStdout(t *testing.T) {
 func TestEnsureLogPathBestEffort(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "logs", "app", "applog")
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "uid"}}
+	pod := &corev1.Pod{Name: "test", Namespace: "default", UID: "uid"}
 	cp := logpilotv1alpha1.ContainerPolicy{Name: "app", LogType: "applog", Delivery: "bestEffort"}
 
 	if err := ensureLogPath(pod, cp, logPath); err != nil {
@@ -135,7 +134,7 @@ func TestEnsureLogPathBestEffort(t *testing.T) {
 func TestEnsureLogPathGuaranteed(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "logs", "app", "applog")
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "uid"}}
+	pod := &corev1.Pod{Name: "test", Namespace: "default", UID: "uid"}
 	cp := logpilotv1alpha1.ContainerPolicy{Name: "app", LogType: "applog", Delivery: "guaranteed"}
 
 	if err := ensureLogPath(pod, cp, logPath); err != nil {

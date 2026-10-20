@@ -177,7 +177,7 @@ func TestParsePoliciesFromPodValid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{podLogPolicyAnnotation: string(raw)}}}
+	pod := &corev1.Pod{Annotations: map[string]string{podLogPolicyAnnotation: string(raw)}}
 	policies, err := parsePoliciesFromPod(pod)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -191,7 +191,7 @@ func TestParsePoliciesFromPodValid(t *testing.T) {
 }
 
 func TestParsePoliciesFromPodInvalid(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{podLogPolicyAnnotation: "{"}}}
+	pod := &corev1.Pod{Annotations: map[string]string{podLogPolicyAnnotation: "{"}}
 
 	if _, err := parsePoliciesFromPod(pod); err == nil {
 		t.Fatal("expected invalid JSON annotation to return an error")
@@ -262,7 +262,7 @@ func TestExtractStringSliceInvalidJSON(t *testing.T) {
 
 func TestLogPath(t *testing.T) {
 	w := newTestWatcher(t)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "uid"}}
+	pod := &corev1.Pod{Name: "test", Namespace: "default", UID: "uid"}
 	cp := logpilotv1alpha1.ContainerPolicy{Name: "app", LogType: "applog"}
 
 	if got := w.logPath(pod, cp); got != "/logs/LogPilotPolicy/default/test/uid/app/applog" {
@@ -272,7 +272,7 @@ func TestLogPath(t *testing.T) {
 
 func TestPodLogDir(t *testing.T) {
 	w := newTestWatcher(t)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "uid"}}
+	pod := &corev1.Pod{Name: "test", Namespace: "default", UID: "uid"}
 
 	if got := w.PodLogDir(pod); got != "/logs/LogPilotPolicy/default/test/uid" {
 		t.Fatalf("unexpected pod log dir: %q", got)
@@ -285,7 +285,7 @@ func TestStopAllEmpty(t *testing.T) {
 
 func TestWatcherCleanup(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir()})
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 	podLogDir := w.PodLogDir(pod)
 	if err := os.MkdirAll(podLogDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -301,7 +301,7 @@ func TestWatcherCleanup(t *testing.T) {
 
 func TestWatcherCleanupNonExistent(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir()})
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 
 	if err := w.Cleanup(pod); err != nil {
 		t.Fatalf("expected no error cleaning up missing dir, got %v", err)
@@ -368,7 +368,7 @@ func TestOnPodDeletedWithRunners(t *testing.T) {
 
 func TestOnPodAddNoPolicies(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir(), MetaDir: t.TempDir()})
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 
 	if ok := w.OnPodAdd(pod); !ok {
 		t.Fatal("expected pod without policies to be treated as ready")
@@ -380,14 +380,14 @@ func TestOnPodAddNoPolicies(t *testing.T) {
 
 func TestOnPodAddInvalidAnnotation(t *testing.T) {
 	w := newTestWatcherWithConfig(t, Config{LogDir: t.TempDir(), MetaDir: t.TempDir()})
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name:      "mypod",
 		Namespace: "default",
 		UID:       "uid1",
 		Annotations: map[string]string{
 			podLogPolicyAnnotation: "{",
 		},
-	}}
+	}
 
 	if ok := w.OnPodAdd(pod); !ok {
 		t.Fatal("expected pod with invalid annotation to return ready")
@@ -578,8 +578,8 @@ func TestSyncPodsEmptyList(t *testing.T) {
 
 func TestSyncPodsAddsReadyPod(t *testing.T) {
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid-ready"},
-		Spec:       corev1.PodSpec{NodeName: "node1"},
+		Name: "mypod", Namespace: "default", UID: "uid-ready",
+		Spec: corev1.PodSpec{NodeName: "node1"},
 	}
 	w := New(
 		Config{NodeName: "node1", LogDir: t.TempDir(), MetaDir: t.TempDir()},
@@ -635,7 +635,7 @@ func TestConsumePodWatchAddedEvent(t *testing.T) {
 	w := newTestWatcher(t)
 	fw := k8swatch.NewFake()
 	seen := make(map[string]bool)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 	done := make(chan error, 1)
 
 	go func() {
@@ -655,7 +655,7 @@ func TestConsumePodWatchAddedEvent(t *testing.T) {
 func TestConsumePodWatchDeletedEvent(t *testing.T) {
 	w := newTestWatcher(t)
 	fw := k8swatch.NewFake()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 	seen := map[string]bool{string(pod.UID): true}
 	done := make(chan error, 1)
 
@@ -676,7 +676,7 @@ func TestConsumePodWatchDeletedEvent(t *testing.T) {
 func TestConsumePodWatchErrorEvent(t *testing.T) {
 	w := newTestWatcher(t)
 	fw := k8swatch.NewFake()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "default", UID: "uid1"}}
+	pod := &corev1.Pod{Name: "mypod", Namespace: "default", UID: "uid1"}
 	done := make(chan error, 1)
 
 	go func() {
@@ -746,7 +746,7 @@ func TestAcquireClusterPolicyLeaseHeldByOtherNode(t *testing.T) {
 	duration := int32(30)
 	renewed := metav1.NewMicroTime(time.Now())
 	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: dns1123Name("logpilot-cluster-policy-my-policy"), Namespace: "default"},
+		Name: dns1123Name("logpilot-cluster-policy-my-policy"), Namespace: "default",
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity:       &other,
 			LeaseDurationSeconds: &duration,
@@ -766,7 +766,7 @@ func TestAcquireClusterPolicyLeaseRenewsSameHolder(t *testing.T) {
 	oldRenew := metav1.NewMicroTime(time.Now().Add(-time.Minute))
 	leaseName := dns1123Name("logpilot-cluster-policy-my-policy")
 	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: leaseName, Namespace: "default"},
+		Name: leaseName, Namespace: "default",
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity:       &holder,
 			LeaseDurationSeconds: &duration,
@@ -828,7 +828,7 @@ func TestAcquireClusterPolicyLeaseRetriesConflict(t *testing.T) {
 	duration := int32(30)
 	leaseName := dns1123Name("logpilot-cluster-policy-my-policy")
 	baseClient := clientfake.NewClientBuilder().WithScheme(newTestScheme(t)).WithRuntimeObjects(&coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: leaseName, Namespace: "default"},
+		Name: leaseName, Namespace: "default",
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity:       &holder,
 			LeaseDurationSeconds: &duration,
@@ -918,7 +918,7 @@ func TestReconcileClusterPoliciesStopsRunnerWhenLeaseLost(t *testing.T) {
 	renewed := metav1.NewMicroTime(time.Now())
 	policy := newClusterPolicy("policy-a", "k8sEvent", filepath.Join(t.TempDir(), "out.json"))
 	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: dns1123Name("logpilot-cluster-policy-policy-a"), Namespace: "default"},
+		Name: dns1123Name("logpilot-cluster-policy-policy-a"), Namespace: "default",
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity:       &other,
 			LeaseDurationSeconds: &duration,
@@ -1196,14 +1196,14 @@ func podWithPolicies(t *testing.T, uid string, policies ...logpilotv1alpha1.Cont
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	return &corev1.Pod{
 		Name:      "mypod",
 		Namespace: "default",
 		UID:       types.UID(uid),
 		Annotations: map[string]string{
 			podLogPolicyAnnotation: string(raw),
 		},
-	}}
+	}
 }
 
 func newIndexedPodClient(t *testing.T, objs ...runtime.Object) ctrlclient.Client {
@@ -1278,7 +1278,7 @@ func newTestWatcherWithConfig(t *testing.T, cfg Config, objs ...runtime.Object) 
 
 func newClusterPolicy(name, inputType, outputPath string) logpilotv1alpha1.ClusterLogPilotPolicy {
 	return logpilotv1alpha1.ClusterLogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
 			Input: logpilotv1alpha1.InputSpec{Type: inputType},
 			Output: logpilotv1alpha1.OutputSpec{

@@ -30,12 +30,10 @@ func makePolicy(labels map[string]string, containers []logpilotv1alpha1.Containe
 
 func makePod(labels map[string]string, containers []corev1.Container) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: "default",
-			Labels:    labels,
-		},
-		Spec: corev1.PodSpec{Containers: containers},
+		Name:      "test-pod",
+		Namespace: "default",
+		Labels:    labels,
+		Spec:      corev1.PodSpec{Containers: containers},
 	}
 }
 
@@ -300,7 +298,7 @@ func TestMutatePodReturnsListError(t *testing.T) {
 func TestMutatePodReturnsInjectionError(t *testing.T) {
 	scheme := newTestScheme(t)
 	badPolicy := logpilotv1alpha1.LogPilotPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "bad-policy", Namespace: "default"},
+		Name: "bad-policy", Namespace: "default",
 		Spec: logpilotv1alpha1.LogPilotPolicySpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "myapp"}},
 			Containers: []logpilotv1alpha1.ContainerPolicy{{

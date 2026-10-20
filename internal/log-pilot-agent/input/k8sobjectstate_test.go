@@ -22,8 +22,8 @@ import (
 func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 	client := fake.NewSimpleClientset( //nolint:staticcheck
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "default"},
-			Spec:       corev1.PodSpec{NodeName: "node-1"},
+			Name: "pod-1", Namespace: "default",
+			Spec: corev1.PodSpec{NodeName: "node-1"},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{{
@@ -39,7 +39,7 @@ func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 			},
 		},
 		&corev1.Node{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+			Name: "node-1",
 			Status: corev1.NodeStatus{
 				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 			},
@@ -71,20 +71,20 @@ func TestK8sObjectStateInputSnapshotsSelectedResources(t *testing.T) {
 func TestK8sObjectStateInputSnapshotsWorkloads(t *testing.T) {
 	client := fake.NewSimpleClientset( //nolint:staticcheck
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "deploy", Namespace: "default"},
-			Status:     appsv1.DeploymentStatus{Replicas: 2, ReadyReplicas: 1, UnavailableReplicas: 1},
+			Name: "deploy", Namespace: "default",
+			Status: appsv1.DeploymentStatus{Replicas: 2, ReadyReplicas: 1, UnavailableReplicas: 1},
 		},
 		&appsv1.StatefulSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "sts", Namespace: "default"},
-			Status:     appsv1.StatefulSetStatus{Replicas: 2, ReadyReplicas: 2},
+			Name: "sts", Namespace: "default",
+			Status: appsv1.StatefulSetStatus{Replicas: 2, ReadyReplicas: 2},
 		},
 		&appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "ds", Namespace: "default"},
-			Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, NumberReady: 2},
+			Name: "ds", Namespace: "default",
+			Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, NumberReady: 2},
 		},
 		&batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "default"},
-			Status:     batchv1.JobStatus{Succeeded: 1},
+			Name: "job", Namespace: "default",
+			Status: batchv1.JobStatus{Succeeded: 1},
 		},
 	)
 	in := NewK8sObjectStateInput(K8sObjectStateConfig{
@@ -127,27 +127,27 @@ func TestK8sObjectStateInputCommit(t *testing.T) {
 }
 
 func TestHandleObjectPod(t *testing.T) {
-	assertHandleObjectEnqueues(t, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"}}, "Pod")
+	assertHandleObjectEnqueues(t, &corev1.Pod{Name: "pod", Namespace: "default"}, "Pod")
 }
 
 func TestHandleObjectNode(t *testing.T) {
-	assertHandleObjectEnqueues(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "Node")
+	assertHandleObjectEnqueues(t, &corev1.Node{Name: "node"}, "Node")
 }
 
 func TestHandleObjectDeployment(t *testing.T) {
-	assertHandleObjectEnqueues(t, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy", Namespace: "default"}}, "Deployment")
+	assertHandleObjectEnqueues(t, &appsv1.Deployment{Name: "deploy", Namespace: "default"}, "Deployment")
 }
 
 func TestHandleObjectStatefulSet(t *testing.T) {
-	assertHandleObjectEnqueues(t, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "sts", Namespace: "default"}}, "StatefulSet")
+	assertHandleObjectEnqueues(t, &appsv1.StatefulSet{Name: "sts", Namespace: "default"}, "StatefulSet")
 }
 
 func TestHandleObjectDaemonSet(t *testing.T) {
-	assertHandleObjectEnqueues(t, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "ds", Namespace: "default"}}, "DaemonSet")
+	assertHandleObjectEnqueues(t, &appsv1.DaemonSet{Name: "ds", Namespace: "default"}, "DaemonSet")
 }
 
 func TestHandleObjectJob(t *testing.T) {
-	assertHandleObjectEnqueues(t, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "default"}}, "Job")
+	assertHandleObjectEnqueues(t, &batchv1.Job{Name: "job", Namespace: "default"}, "Job")
 }
 
 func TestHandleObjectUnknown(t *testing.T) {
@@ -285,7 +285,7 @@ func TestK8sObjectStateWatch(t *testing.T) {
 			close(done)
 		}()
 
-		fw.Add(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"}})
+		fw.Add(&corev1.Pod{Name: "pod", Namespace: "default"})
 		select {
 		case ev := <-handled:
 			if ev.Type != watch.Added {

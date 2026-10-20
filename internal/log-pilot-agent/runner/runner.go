@@ -26,7 +26,7 @@ type Config struct {
 type Runner struct {
 	cfg  Config
 	done chan struct{} // closed when Run() returns, for callers to wait on
-	sent int64
+	sent atomic.Int64
 
 	// cancelMu guards cancel so that Stop() can safely call it before Run() sets it.
 	cancelMu sync.Mutex
@@ -87,7 +87,7 @@ func (r *Runner) Run(ctx context.Context) {
 		if r.cfg.Input != nil {
 			_ = r.cfg.Input.Commit()
 		}
-		atomic.AddInt64(&r.sent, int64(len(records)))
+		r.sent.Add(int64(len(records)))
 	}
 	r.shutdown()
 }
@@ -105,7 +105,7 @@ func (r *Runner) Lag() int64 {
 }
 
 // Sent returns the number of records successfully written by this runner.
-func (r *Runner) Sent() int64 { return atomic.LoadInt64(&r.sent) }
+func (r *Runner) Sent() int64 { return r.sent.Load() }
 
 // Stop cancels the runner's context, causing Run() to break out of its loop
 // and begin graceful shutdown. It is safe to call before Run() starts.
@@ -177,7 +177,7 @@ func (r *Runner) shutdown() {
 					break
 				}
 				_ = r.cfg.Input.Commit()
-				atomic.AddInt64(&r.sent, int64(len(records)))
+				r.sent.Add(int64(len(records)))
 			}
 		}
 		// drainCtx expiry also means we didn't drain everything.

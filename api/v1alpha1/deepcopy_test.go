@@ -243,7 +243,7 @@ func sampleClusterLogPilotPolicyStatus() ClusterLogPilotPolicyStatus {
 
 func sampleLogPilot() *LogPilot {
 	return &LogPilot{
-		TypeMeta:   metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "LogPilot"},
+		APIVersion: GroupVersion.String(), Kind: "LogPilot",
 		ObjectMeta: sampleObjectMeta("logpilot", "logpilot-system"),
 		Spec:       sampleLogPilotSpec(),
 		Status:     sampleLogPilotStatus(),
@@ -252,7 +252,7 @@ func sampleLogPilot() *LogPilot {
 
 func sampleLogPilotList() *LogPilotList {
 	return &LogPilotList{
-		TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "LogPilotList"},
+		APIVersion: GroupVersion.String(), Kind: "LogPilotList",
 		ListMeta: sampleListMeta(),
 		Items:    []LogPilot{*sampleLogPilot()},
 	}
@@ -260,7 +260,7 @@ func sampleLogPilotList() *LogPilotList {
 
 func sampleLogPilotPolicy() *LogPilotPolicy {
 	return &LogPilotPolicy{
-		TypeMeta:   metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "LogPilotPolicy"},
+		APIVersion: GroupVersion.String(), Kind: "LogPilotPolicy",
 		ObjectMeta: sampleObjectMeta("policy", "default"),
 		Spec:       sampleLogPilotPolicySpec(),
 		Status:     sampleLogPilotPolicyStatus(),
@@ -269,7 +269,7 @@ func sampleLogPilotPolicy() *LogPilotPolicy {
 
 func sampleLogPilotPolicyList() *LogPilotPolicyList {
 	return &LogPilotPolicyList{
-		TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "LogPilotPolicyList"},
+		APIVersion: GroupVersion.String(), Kind: "LogPilotPolicyList",
 		ListMeta: sampleListMeta(),
 		Items:    []LogPilotPolicy{*sampleLogPilotPolicy()},
 	}
@@ -277,7 +277,7 @@ func sampleLogPilotPolicyList() *LogPilotPolicyList {
 
 func sampleClusterLogPilotPolicy() *ClusterLogPilotPolicy {
 	return &ClusterLogPilotPolicy{
-		TypeMeta:   metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "ClusterLogPilotPolicy"},
+		APIVersion: GroupVersion.String(), Kind: "ClusterLogPilotPolicy",
 		ObjectMeta: sampleObjectMeta("cluster-policy", ""),
 		Spec:       sampleClusterLogPilotPolicySpec(),
 		Status:     sampleClusterLogPilotPolicyStatus(),
@@ -286,7 +286,7 @@ func sampleClusterLogPilotPolicy() *ClusterLogPilotPolicy {
 
 func sampleClusterLogPilotPolicyList() *ClusterLogPilotPolicyList {
 	return &ClusterLogPilotPolicyList{
-		TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: "ClusterLogPilotPolicyList"},
+		APIVersion: GroupVersion.String(), Kind: "ClusterLogPilotPolicyList",
 		ListMeta: sampleListMeta(),
 		Items:    []ClusterLogPilotPolicy{*sampleClusterLogPilotPolicy()},
 	}
