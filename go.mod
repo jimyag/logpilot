@@ -1,6 +1,8 @@
 module github.com/jimyag/logpilot
 
-go 1.26.0
+go 1.27
+
+toolchain go1.27.3
 
 require (
 	github.com/jimyag/auto-cert-webhook v1.2.5
