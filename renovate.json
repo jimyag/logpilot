@@ -34,5 +34,27 @@
       ],
       "enabled": true
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.custom-gcl\\.yml$/"
+      ],
+      "matchStrings": [
+        "version: (?<currentValue>v[0-9.]+)"
+      ],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)Makefile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+[A-Z_]+\\s*[:?]?=\\s*(?<currentValue>v?[0-9][^\\s]+)"
+      ]
+    }
   ]
 }

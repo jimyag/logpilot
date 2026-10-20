@@ -55,6 +55,9 @@ linters:
       - third_party$
       - builtin$
       - examples$
+
+issues:
+  new-from-rev: HEAD~
 formatters:
   enable:
     - gofmt
