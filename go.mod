@@ -63,7 +63,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/openshift/api v0.0.0-20261017003925-24b2699a9b32 // indirect
 	github.com/openshift/client-go v0.0.0-20261014115618-03a1e773ff3d // indirect
-	github.com/openshift/library-go v0.0.0-20261019145849-b3e46fec8a08 // indirect
+	github.com/openshift/library-go v0.0.0-20261021064634-06480bc27735 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.24.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect

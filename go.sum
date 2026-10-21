@@ -140,8 +140,8 @@ github.com/openshift/api v0.0.0-20261017003925-24b2699a9b32 h1:8S9304xp9Ufdfq0V9
 github.com/openshift/api v0.0.0-20261017003925-24b2699a9b32/go.mod h1:2oI3aXQFDjjl7l4xA9ZPSkB+l+lyfWLg7P2sWg9yEvM=
 github.com/openshift/client-go v0.0.0-20261014115618-03a1e773ff3d h1:r17aU6USyHX1ru8dkVZR9jCEuhLy3B7QYEo3rWKI81o=
 github.com/openshift/client-go v0.0.0-20261014115618-03a1e773ff3d/go.mod h1:jJt9qm7qyuNMorTWJussOTVdx70omaSE7asKU+J7yHk=
-github.com/openshift/library-go v0.0.0-20261019145849-b3e46fec8a08 h1:4LH+5WsywCGVKS7N9Ut4YBeFFbQ7VX4TST5XZbKzH7k=
-github.com/openshift/library-go v0.0.0-20261019145849-b3e46fec8a08/go.mod h1:JOJKlqc8fqB/I632V61geb80zImgXC8FEQR3jn2/syI=
+github.com/openshift/library-go v0.0.0-20261021064634-06480bc27735 h1:AiTJrBZuEPrbJ+qWgOf85Wm91SClFOQk9ckL4qXo5gA=
+github.com/openshift/library-go v0.0.0-20261021064634-06480bc27735/go.mod h1:JOJKlqc8fqB/I632V61geb80zImgXC8FEQR3jn2/syI=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
