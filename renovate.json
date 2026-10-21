@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended"
   ],
+  "postUpdateOptions": ["gomodTidy"],
   "packageRules": [
     {
       "matchManagers": [
@@ -33,6 +34,17 @@
         "go"
       ],
       "enabled": true
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/**", "sigs.k8s.io/**", "github.com/openshift/**"],
+      "groupName": "Kubernetes and OpenShift"
+    },
+    {
+      "description": "Use the kube-openapi revision selected by Kubernetes; its main branch already uses structured-merge-diff v7.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/kube-openapi"],
+      "enabled": false
     }
   ],
   "customManagers": [
