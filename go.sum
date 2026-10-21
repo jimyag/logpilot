@@ -386,6 +386,8 @@ google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409 h1:
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409/go.mod h1:j9x/tPzZkyxcgEFkiKEEGxfvyumM01BEtsW8xzOahRQ=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941 h1:QG6hS4zFplRZvOQedzei4t2pT/zkQc3VR1u+S9/rcAw=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941/go.mod h1:OaIUM3+LpYcK2GXM4FTmhWoIq371Owdr+Cc7/BsYHHc=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b h1:6WNWHZk91dp4gZ25642OALkuG1UVNZbwENJD19DnB8k=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b/go.mod h1:OaIUM3+LpYcK2GXM4FTmhWoIq371Owdr+Cc7/BsYHHc=
 google.golang.org/grpc v1.72.2 h1:TdbGzwb82ty4OusHWepvFWGLgIbNo1/SUynEN0ssqv8=
 google.golang.org/grpc v1.72.2/go.mod h1:wH5Aktxcg25y1I3w7H69nHfXdOG3UiadoBtjh3izSDM=
 google.golang.org/grpc v1.79.3 h1:sybAEdRIEtvcD68Gx7dmnwjZKlyfuc61Dyo9pGXXkKE=
