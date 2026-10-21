@@ -23,7 +23,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -53,7 +55,15 @@ var _ = Describe("ClusterLogPilotPolicy Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: logpilotv1alpha1.ClusterLogPilotPolicySpec{
+						Input: logpilotv1alpha1.InputSpec{Type: "k8sEvent"},
+						Output: logpilotv1alpha1.OutputSpec{
+							Type: "file",
+							Config: map[string]apiextensionsv1.JSON{
+								"path": {Raw: []byte(`"/var/log/output.log"`)},
+							},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -79,8 +89,10 @@ var _ = Describe("ClusterLogPilotPolicy Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(k8sClient.Get(ctx, typeNamespacedName, clusterlogpilotpolicy)).To(Succeed())
+			condition := meta.FindStatusCondition(clusterlogpilotpolicy.Status.Conditions, conditionAccepted)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 })
