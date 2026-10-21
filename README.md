@@ -25,12 +25,17 @@ conditions.
 
 ## Requirements
 
-- Go
+- Go 1.27+
 - Docker
 - kubectl
 - kind
 - kubebuilder/controller-runtime toolchain installed through the project
   `Makefile` targets
+
+Kubernetes, controller-runtime, and OpenShift modules are updated as one compatible
+group. Keep kube-openapi at the revision selected by Kubernetes: newer commits
+already use structured-merge-diff v7, which the current stable Kubernetes client
+does not support.
 
 ## Quick Start With kind
 
